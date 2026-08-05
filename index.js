@@ -7,7 +7,7 @@ const {
     delay, 
     downloadMediaMessage,
     DisconnectReason,
-    useMultiFileAuthState  // 🛠️ IMPORTED for vendors
+    useMultiFileAuthState
 } = require('@whiskeysockets/baileys');
 const { OpenAI } = require('openai');
 const pino = require('pino');
@@ -89,7 +89,6 @@ const RegSession = mongoose.model('RegSession', new mongoose.Schema({
 
 const Auth = mongoose.model('Auth', new mongoose.Schema({ _id: String, data: String }));
 
-// 🛠️ MASTER AGENT: MongoDB Auth State (Cloud Persistent)
 async function useMongoDBAuthState(sessionId = 'creds') {
     const writeData = async (data, id) => {
         await Auth.updateOne({ _id: `${sessionId}-${id}` }, { $set: { data: JSON.stringify(data, BufferJSON.replacer) } }, { upsert: true });
@@ -198,14 +197,23 @@ async function createVirtualAccount(customerPhone, vendorSubaccount) {
 // 3. HELPERS
 // ----------------------------------------------------
 let globalSock = null;
+let masterAgentReady = false;
 const vendorSockets = {};
 const ADMIN_PHONE = process.env.ADMIN_PHONE || "2348148698365";
 const REG_TRIGGERS = ['i want to register', 'how do i register', 'register my business', 'know more about this ai', 'hi can i know more', 'register'];
 const BUYING_INTENT_TRIGGERS = ['i want to buy', 'do you have', 'whats the price', "what's the price", 'how much', 'is this available', 'price of', 'catalog', 'catalogue', 'cost of', 'i need to order', 'how to order', 'pay for', 'available', 'buy', 'what do you sell', 'products', 'product list', 'show me'];
 
-// 🛠️ BOOT QUEUE SYSTEM
 const vendorBootQueue = [];
 let isBooting = false;
+
+function getVendorAuthPath(phone) {
+    return path.join(process.cwd(), 'auth_vendors', `vendor_${phone}`);
+}
+
+function vendorAuthExists(phone) {
+    const p = getVendorAuthPath(phone);
+    return fs.existsSync(path.join(p, 'creds.json'));
+}
 
 async function processBootQueue() {
     if (isBooting || vendorBootQueue.length === 0) return;
@@ -213,6 +221,13 @@ async function processBootQueue() {
     
     while (vendorBootQueue.length > 0) {
         const { phone, storeName } = vendorBootQueue.shift();
+        
+        // 🛠️ CRITICAL: Skip if no auth file (Render wiped it)
+        if (!vendorAuthExists(phone)) {
+            console.log(`⏭️ [Boot Queue] SKIPPING ${storeName} (${phone}) — no auth files. Vendor must message LINK to reconnect.`);
+            continue;
+        }
+        
         console.log(`⏳ [Boot Queue] Connecting ${storeName} (${phone})... (${vendorBootQueue.length} remaining)`);
         
         try {
@@ -222,17 +237,19 @@ async function processBootQueue() {
         }
         
         if (vendorBootQueue.length > 0) {
-            console.log(`⏳ [Boot Queue] Waiting 25s before next vendor...`);
-            await delay(25000);
+            console.log(`⏳ [Boot Queue] Waiting 30s before next vendor...`);
+            await delay(30000);
         }
     }
     
     isBooting = false;
 }
 
-// 🛠️ DISSOLVE ALL VENDORS
 async function dissolveAllVendors() {
     console.log("💥 [DISSOLVE] Starting full vendor dissolution...");
+    
+    // Clear queue first
+    vendorBootQueue.length = 0;
     
     const vendorPhones = Object.keys(vendorSockets);
     for (const phone of vendorPhones) {
@@ -249,19 +266,14 @@ async function dissolveAllVendors() {
         }
     }
     
-    // 🛠️ Delete vendor auth folders
     const authBasePath = path.join(process.cwd(), 'auth_vendors');
     if (fs.existsSync(authBasePath)) {
-        const folders = fs.readdirSync(authBasePath);
-        for (const folder of folders) {
-            if (folder.startsWith('vendor_')) {
-                try {
-                    fs.rmSync(path.join(authBasePath, folder), { recursive: true, force: true });
-                    console.log(`🗑️ [DISSOLVE] Deleted auth folder: ${folder}`);
-                } catch (e) {
-                    console.error(`❌ [DISSOLVE] Failed to delete folder ${folder}:`, e.message);
-                }
-            }
+        try {
+            fs.rmSync(authBasePath, { recursive: true, force: true });
+            fs.mkdirSync(authBasePath, { recursive: true });
+            console.log("🗑️ [DISSOLVE] All vendor auth folders wiped.");
+        } catch (e) {
+            console.error("❌ [DISSOLVE] Failed to wipe auth folders:", e.message);
         }
     }
     
@@ -271,10 +283,6 @@ async function dissolveAllVendors() {
     const sessionDelete = await RegSession.deleteMany({});
     
     console.log(`✅ [DISSOLVE] Complete!`);
-    console.log(`   - Vendors deleted: ${vendorDelete.deletedCount}`);
-    console.log(`   - Products deleted: ${productDelete.deletedCount}`);
-    console.log(`   - Orders deleted: ${orderDelete.deletedCount}`);
-    console.log(`   - Sessions deleted: ${sessionDelete.deletedCount}`);
     
     return {
         vendors: vendorDelete.deletedCount,
@@ -322,7 +330,7 @@ function cleanPhoneNumber(rawPhone) {
 }
 
 // ----------------------------------------------------
-// 4. VENDOR AGENT SPAWN (FILE-BASED AUTH + WINDOWS CHROME)
+// 4. VENDOR AGENT SPAWN
 // ----------------------------------------------------
 async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
     const cleanPhone = cleanPhoneNumber(realPhone);
@@ -345,8 +353,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
         return null;
     }
 
-    // 🛠️ CRITICAL FIX: Use file-based auth state (previous working method)
-    const authFolder = path.join(process.cwd(), 'auth_vendors', `vendor_${cleanPhone}`);
+    const authFolder = getVendorAuthPath(cleanPhone);
     if (!fs.existsSync(path.dirname(authFolder))) {
         fs.mkdirSync(path.dirname(authFolder), { recursive: true });
     }
@@ -357,7 +364,6 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
         auth: state,
         logger: pino({ level: 'error' }),
         printQRInTerminal: false,
-        // 🛠️ CRITICAL FIX: Windows Chrome browser to avoid "scam" warning
         browser: ["Chrome (Windows)", "Chrome", "110.0.0.0"], 
         syncFullHistory: false, 
         keepAliveIntervalMs: 30000,
@@ -418,12 +424,8 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
             console.error(`❌ [Vendor Agent: ${storeName}] Closed with status: ${statusCode}`, error?.message || "");
 
             if (statusCode === 408) {
-                console.error(`⏳ [Vendor Agent: ${storeName}] 408 Timeout — re-queuing for retry in 60s.`);
+                console.error(`⏳ [Vendor Agent: ${storeName}] 408 Timeout — clearing socket. Vendor must re-link.`);
                 delete vendorSockets[cleanPhone];
-                setTimeout(() => {
-                    vendorBootQueue.push({ phone: cleanPhone, storeName });
-                    processBootQueue();
-                }, 60000);
                 return;
             }
 
@@ -433,7 +435,6 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     vendorSockets[cleanPhone].ev.removeAllListeners('connection.update');
                     delete vendorSockets[cleanPhone];
                 }
-                // 🛠️ Clear file-based auth on hard failures
                 try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e){}
                 return; 
             }
@@ -621,7 +622,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 }
 
 // ----------------------------------------------------
-// 5. MASTER ONBOARDING AGENT SOCKET (MONGO AUTH)
+// 5. MASTER ONBOARDING AGENT SOCKET
 // ----------------------------------------------------
 async function startNaxrMasterAgent(isReconnect = false) {
     const { state, saveCreds } = await useMongoDBAuthState('master_agent_session'); 
@@ -651,10 +652,12 @@ async function startNaxrMasterAgent(isReconnect = false) {
         }
 
         if (connection === 'open') {
+            masterAgentReady = true;
             console.log("🚀 NAXR MASTER ONBOARDING AGENT IS LIVE! 🇳🇬");
         }
 
         if (connection === 'close') {
+            masterAgentReady = false;
             const error = lastDisconnect?.error;
             const statusCode = error?.output?.statusCode || error?.output?.payload?.statusCode;
 
@@ -734,8 +737,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
                             try { vendorSockets[targetPhone].ws.close(); } catch(e){}
                             delete vendorSockets[targetPhone];
                         }
-                        // 🛠️ Also delete file auth folder
-                        try { fs.rmSync(path.join(process.cwd(), 'auth_vendors', `vendor_${targetPhone}`), { recursive: true, force: true }); } catch(e){}
+                        try { fs.rmSync(getVendorAuthPath(targetPhone), { recursive: true, force: true }); } catch(e){}
                         await sock.sendMessage(remoteJid, { text: `✅ Vendor ${targetPhone} purged.` });
                         continue;
                     }
@@ -750,7 +752,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
                             try { vendorSockets[targetPhone].ws.close(); } catch(e){}
                             delete vendorSockets[targetPhone];
                         }
-                        try { fs.rmSync(path.join(process.cwd(), 'auth_vendors', `vendor_${targetPhone}`), { recursive: true, force: true }); } catch(e){}
+                        try { fs.rmSync(getVendorAuthPath(targetPhone), { recursive: true, force: true }); } catch(e){}
                         await Vendor.deleteOne({ jid: remoteJid });
                     }
                     await RegSession.deleteOne({ phoneNumber: remoteJid });
@@ -773,8 +775,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
                             delete vendorSockets[targetPhone];
                             await delay(1500); 
                         }
-                        // 🛠️ Clear old file auth before generating new code
-                        try { fs.rmSync(path.join(process.cwd(), 'auth_vendors', `vendor_${targetPhone}`), { recursive: true, force: true }); } catch(e){}
+                        try { fs.rmSync(getVendorAuthPath(targetPhone), { recursive: true, force: true }); } catch(e){}
 
                         const newCode = await spawnVendorAgent(targetPhone, existingVendor.storeName, true);
                         if (newCode && newCode !== "ALREADY_ACTIVE" && newCode !== "ERROR") {
@@ -847,8 +848,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
                             delete vendorSockets[targetPhone];
                             await delay(1500);
                         }
-                        // 🛠️ Clear old auth folder before spawning fresh
-                        try { fs.rmSync(path.join(process.cwd(), 'auth_vendors', `vendor_${targetPhone}`), { recursive: true, force: true }); } catch(e){}
+                        try { fs.rmSync(getVendorAuthPath(targetPhone), { recursive: true, force: true }); } catch(e){}
 
                         const pairingCode = await spawnVendorAgent(targetPhone, session.storeName, true);
                         await RegSession.deleteOne({ phoneNumber: remoteJid });
@@ -952,19 +952,40 @@ app.post('/paystack-webhook', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 7. AUTO-BOOT ALL VENDORS
+// 7. AUTO-BOOT ALL VENDORS (SAFE)
 // ----------------------------------------------------
 async function bootAllVendors() {
     try {
-        const vendors = await Vendor.find({});
-        console.log(`📋 Found ${vendors.length} vendors in database. Queueing for connection...`);
+        // 🛠️ Wait for Master Agent to be fully ready first
+        let waitCount = 0;
+        while (!masterAgentReady && waitCount < 30) {
+            await delay(1000);
+            waitCount++;
+        }
         
+        if (!masterAgentReady) {
+            console.error("❌ Master Agent failed to connect. Skipping vendor boot.");
+            return;
+        }
+        
+        const vendors = await Vendor.find({});
+        console.log(`📋 Found ${vendors.length} vendors in database. Checking auth files...`);
+        
+        let skipped = 0;
         for (const v of vendors) {
             const cleanPhone = cleanPhoneNumber(v.phoneNumber);
             if (!cleanPhone) continue;
+            
+            if (!vendorAuthExists(cleanPhone)) {
+                console.log(`⏭️ [Auto-Boot] SKIPPING ${v.storeName} (${cleanPhone}) — no auth files. Vendor must message LINK.`);
+                skipped++;
+                continue;
+            }
+            
             vendorBootQueue.push({ phone: cleanPhone, storeName: v.storeName });
         }
         
+        console.log(`📋 ${vendorBootQueue.length} vendors queued for boot. ${skipped} skipped (no auth).`);
         processBootQueue();
         
     } catch (err) {
@@ -972,7 +993,15 @@ async function bootAllVendors() {
     }
 }
 
+// 🛠️ HEALTH ENDPOINT — prevents Render spin-down
 app.get('/', (req, res) => res.send('Naxr AI Engine Active! 🚀'));
+app.get('/health', (req, res) => res.json({ 
+    status: 'ok', 
+    masterAgent: masterAgentReady, 
+    vendorsConnected: Object.keys(vendorSockets).length,
+    uptime: process.uptime()
+}));
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🌐 Server active on port ${PORT}`));
 
