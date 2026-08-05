@@ -147,7 +147,7 @@ async function transcribeVoiceNote(msg) {
 }
 
 // ----------------------------------------------------
-// 2. PAYSTACK VIRTUAL ACCOUNT ENGINE (LIVE MODE)
+// 2. PAYSTACK VIRTUAL ACCOUNT ENGINE (TEST MODE)
 // ----------------------------------------------------
 async function createVendorSubaccount(storeName, bankNameRaw, accountNumber) {
     try {
@@ -176,7 +176,7 @@ async function createVirtualAccount(customerPhone, vendorSubaccount) {
         if (!process.env.PAYSTACK_SECRET_KEY) throw new Error("No API key");
         
         const custRes = await axios.post('https://api.paystack.co/customer', {
-            email: `buyer_${customerPhone}_${Date.now()}@naxr.live`,
+            email: `buyer_${customerPhone}_${Date.now()}@naxr.test`,
             first_name: "Naxr",
             last_name: "Customer",
             phone: customerPhone
@@ -184,10 +184,9 @@ async function createVirtualAccount(customerPhone, vendorSubaccount) {
         
         const customerCode = custRes.data.data.customer_code;
 
-        // Using Wema Bank for live Paystack DVA support in Nigeria
         const dvaRes = await axios.post('https://api.paystack.co/dedicated_account', {
             customer: customerCode,
-            preferred_bank: "wema-bank" 
+            preferred_bank: "test-bank" 
         }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }});
 
         return {
@@ -197,8 +196,13 @@ async function createVirtualAccount(customerPhone, vendorSubaccount) {
             isTestMode: false
         };
     } catch (error) {
-        console.log("⚠️ Paystack API Error / Live Account Failed", error?.response?.data || error.message);
-        throw error; 
+        console.log("⚠️ Paystack Virtual Account Test Fallback Triggered", error?.response?.data || error.message);
+        return {
+            accountNumber: `90${Math.floor(Math.random() * 100000000)}`,
+            bankName: "Test Bank (Paystack)",
+            accountName: "Naxr AI Escrow",
+            isTestMode: true
+        };
     }
 }
 
@@ -378,6 +382,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 
                 // ─── VENDOR SELF-CHAT ADMIN CONTROLS ───
                 if (isVendorSelfChat) {
+                    // AI ON / OFF
                     if (lowerText === 'ai off') {
                         await Vendor.findOneAndUpdate({ phoneNumber: cleanPhone }, { aiActive: false });
                         await vendorSock.sendMessage(remoteJid, { text: `🛑 *AI Agent is now OFF.*\n\nCustomers will no longer receive automated replies until you turn it back on.` });
@@ -389,6 +394,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
+                    // STATS
                     if (lowerText === 'stats' || lowerText === 'sales' || lowerText === 'dashboard') {
                         const salesCount = await Order.countDocuments({ vendorPhone: cleanPhone, status: 'PAID' });
                         const pendingCount = await Order.countDocuments({ vendorPhone: cleanPhone, status: 'PENDING' });
@@ -413,6 +419,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     } 
 
+                    // ANALYTICS (enhanced stats)
                     if (lowerText === 'analytics') {
                         const paidOrders = await Order.find({ vendorPhone: cleanPhone, status: 'PAID' }).sort({ createdAt: -1 }).limit(5);
                         const pendingOrders = await Order.find({ vendorPhone: cleanPhone, status: 'PENDING' }).sort({ createdAt: -1 }).limit(5);
@@ -440,6 +447,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
+                    // PRODUCTS
                     if (lowerText === 'products' || lowerText === 'catalog') {
                         const activeProducts = await Product.find({ vendorPhone: cleanPhone });
                         const catalogText = activeProducts.length > 0 
@@ -449,6 +457,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     } 
 
+                    // EDIT DESCRIPTION
                     if (lowerText.startsWith('edit description ')) {
                         const newDesc = textMessage.substring(17).trim();
                         await Vendor.updateOne({ phoneNumber: cleanPhone }, { description: newDesc });
@@ -456,6 +465,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
+                    // DELETE PRODUCT
                     if (lowerText.startsWith('delete product ')) {
                         const prodName = textMessage.substring(15).trim();
                         const res = await Product.deleteOne({ vendorPhone: cleanPhone, name: { $regex: new RegExp(prodName, 'i') } });
@@ -464,6 +474,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
+                    // CONFIRM TEST PAYMENT (manual test mode)
                     if (lowerText === 'confirm test' || lowerText === 'test confirm') {
                         const pendingOrder = await Order.findOne({ vendorPhone: cleanPhone, status: 'PENDING' }).sort({ createdAt: -1 });
                         if (!pendingOrder) {
@@ -482,6 +493,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
+                    // ADD PRODUCT VIA IMAGE
                     if (isImage) {
                         const match = textMessage.match(/\d+/);
                         if (match) {
@@ -498,6 +510,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
+                    // HELP
                     if (lowerText === 'help') {
                         await vendorSock.sendMessage(remoteJid, { 
                             text: `💡 *Naxr Vendor Commands:*\n` +
@@ -512,6 +525,8 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         });
                         continue;
                     }
+
+                    // Unrecognized self-chat message
                     continue; 
                 }
 
@@ -554,10 +569,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                 const customerAI = await openai.chat.completions.create({
                     model: "gpt-4o-mini",
                     messages: [
-                        { 
-                            role: "system", 
-                            content: `You are Naxr, sales rep for ${storeName}. Catalog:\n${catalog}\nIf the customer explicitly wants to buy an item, output JSON ONLY: {"action": "BUY", "productName": "Exact Name", "price": 10000}. If the customer asks to SEE a product, view an image, or explicitly names a product to check it out, output JSON ONLY: {"action": "SHOW", "productName": "Exact Name"}. Otherwise reply naturally with friendly emojis.` 
-                        },
+                        { role: "system", content: `You are Naxr, sales rep for ${storeName}. Catalog:\n${catalog}\nIf customer explicitly wants to buy a specific item or mentions a product name, output JSON ONLY: {"action": "BUY", "productName": "Name", "price": 10000}. Otherwise reply naturally with friendly emojis.` },
                         { role: "user", content: textMessage }
                     ]
                 });
@@ -568,45 +580,35 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     try {
                         const data = JSON.parse(reply);
                         
-                        if (data.action === "SHOW") {
-                            const product = activeProducts.find(p => p.name.toLowerCase().includes(data.productName.toLowerCase()) || data.productName.toLowerCase().includes(p.name.toLowerCase()));
-                            
-                            if (product && product.imageUrl) {
-                                await vendorSock.sendMessage(remoteJid, { 
-                                    image: { url: product.imageUrl }, 
-                                    caption: `*${product.name}*\n💰 Price: ₦${product.price.toLocaleString()}` 
-                                });
-                            } else {
-                                await vendorSock.sendMessage(remoteJid, { text: `We currently don't have an image on file for the ${data.productName}, but it is available!` });
-                            }
-                        } 
-                        else if (data.action === "BUY") {
-                            await vendorSock.sendMessage(remoteJid, { text: `⏳ Generating secure Virtual Account via Paystack...` });
+                        await vendorSock.sendMessage(remoteJid, { text: `⏳ Generating secure Virtual Account via Paystack...` });
 
-                            const virtualAcc = await createVirtualAccount(cleanRemoteJidNumber, vendorData.subaccountCode);
-                            
-                            await Order.create({
-                                vendorPhone: cleanPhone,
-                                customerPhone: cleanRemoteJidNumber,
-                                productName: data.productName,
-                                amount: data.price,
-                                virtualAccountNumber: virtualAcc.accountNumber,
-                                status: 'PENDING'
-                            });
-                            
-                            await vendorSock.sendMessage(remoteJid, { 
-                                text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
-                                      `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
-                                      `🏦 *Pay With Transfer:*\n` +
-                                      `Bank: *${virtualAcc.bankName}*\n` +
-                                      `Account No: *${virtualAcc.accountNumber}*\n` +
-                                      `Name: *${virtualAcc.accountName}*\n\n` +
-                                      `_This virtual account is strictly for this transaction. Our AI system will automatically confirm your order once the transfer is received!_ ✨`
-                            });
-                        }
+                        const virtualAcc = await createVirtualAccount(cleanRemoteJidNumber, vendorData.subaccountCode);
+                        
+                        await Order.create({
+                            vendorPhone: cleanPhone,
+                            customerPhone: cleanRemoteJidNumber,
+                            productName: data.productName,
+                            amount: data.price,
+                            virtualAccountNumber: virtualAcc.accountNumber,
+                            status: 'PENDING'
+                        });
+                        
+                        const testWarning = virtualAcc.isTestMode 
+                            ? `\n\n⚠️ *TEST MODE ACTIVE:* This is a test virtual account. Payments will NOT auto-confirm via webhook.\n_Vendor can manually confirm with "confirm test" in their admin chat._`
+                            : '';
+
+                        await vendorSock.sendMessage(remoteJid, { 
+                            text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
+                                  `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
+                                  `🏦 *Pay With Transfer:*\n` +
+                                  `Bank: *${virtualAcc.bankName}*\n` +
+                                  `Account No: *${virtualAcc.accountNumber}*\n` +
+                                  `Name: *${virtualAcc.accountName}*\n\n` +
+                                  `_This virtual account is strictly for this transaction. Our AI system will automatically confirm your order once the transfer is received!_ ✨` +
+                                  testWarning
+                        });
                     } catch (e) {
-                        await vendorSock.sendMessage(remoteJid, { text: "⚠️ Could not generate a payment account at this time. Please ensure the payment gateway is fully activated." });
-                        console.error("Action Execution Error:", e);
+                        await vendorSock.sendMessage(remoteJid, { text: "⚠️ Could not generate a payment account at this time." });
                     }
                 } else {
                     await vendorSock.sendMessage(remoteJid, { text: reply });
