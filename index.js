@@ -238,8 +238,44 @@ function cleanPhoneNumber(rawPhone) {
     return cleaned;
 }
 
+// 🛠️ DISSOLVE ALL VENDORS
+async function dissolveAllVendors() {
+    console.log("💥 [DISSOLVE] Starting full vendor dissolution...");
+    
+    const vendorPhones = Object.keys(vendorSockets);
+    for (const phone of vendorPhones) {
+        try {
+            const sock = vendorSockets[phone];
+            sock.ev.removeAllListeners('creds.update');
+            sock.ev.removeAllListeners('connection.update');
+            sock.ev.removeAllListeners('messages.upsert');
+            try { sock.ws.close(); } catch(e){}
+            delete vendorSockets[phone];
+            console.log(`🔌 [DISSOLVE] Disconnected vendor: ${phone}`);
+        } catch (e) {
+            console.error(`❌ [DISSOLVE] Error disconnecting ${phone}:`, e.message);
+        }
+    }
+    
+    const vendorDelete = await Vendor.deleteMany({});
+    const productDelete = await Product.deleteMany({});
+    const orderDelete = await Order.deleteMany({});
+    const sessionDelete = await RegSession.deleteMany({});
+    const authDelete = await Auth.deleteMany({ _id: { $regex: '^vendor_' } });
+    
+    console.log(`✅ [DISSOLVE] Complete!`);
+    
+    return {
+        vendors: vendorDelete.deletedCount,
+        products: productDelete.deletedCount,
+        orders: orderDelete.deletedCount,
+        sessions: sessionDelete.deletedCount,
+        auths: authDelete.deletedCount
+    };
+}
+
 // ----------------------------------------------------
-// 4. VENDOR AGENT SPAWN (DIAGNOSTIC ENHANCED)
+// 4. VENDOR AGENT SPAWN (MONGO AUTH + WINDOWS CHROME)
 // ----------------------------------------------------
 async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
     const cleanPhone = cleanPhoneNumber(realPhone);
@@ -262,15 +298,20 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
         return null;
     }
 
+    // 🛠️ BACK TO MONGO AUTH (what was working before)
     const { state, saveCreds } = await useMongoDBAuthState(`vendor_${cleanPhone}`);
     
     const vendorSock = makeWASocket({
         auth: state,
         logger: pino({ level: 'error' }),
         printQRInTerminal: false,
-        browser: ["Ubuntu", "Chrome", "110.0.0"], 
+        // 🛠️ FIX: Windows Chrome browser to avoid "scam" warning
+        browser: ["Chrome (Windows)", "Chrome", "110.0.0.0"], 
         syncFullHistory: false, 
-        keepAliveIntervalMs: 30000
+        keepAliveIntervalMs: 30000,
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 60000,
+        markOnlineOnConnect: false
     });
 
     vendorSockets[cleanPhone] = vendorSock;
@@ -324,6 +365,18 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
             const statusCode = error?.output?.statusCode || error?.output?.payload?.statusCode;
             console.error(`❌ [Vendor Agent: ${storeName}] Closed with status: ${statusCode}`, error?.message || "");
 
+            // 🛠️ FIX: 408 timeout - clear auth and require manual relink (don't infinite reconnect)
+            if (statusCode === 408) {
+                console.error(`⏳ [Vendor Agent: ${storeName}] 408 Timeout — clearing auth. Vendor must message LINK to reconnect.`);
+                if (vendorSockets[cleanPhone]) {
+                    vendorSockets[cleanPhone].ev.removeAllListeners('creds.update');
+                    vendorSockets[cleanPhone].ev.removeAllListeners('connection.update');
+                    delete vendorSockets[cleanPhone];
+                }
+                await Auth.deleteMany({ _id: { $regex: `^vendor_${cleanPhone}` } });
+                return;
+            }
+
             if (statusCode === 440 || statusCode === 401 || statusCode === 428 || statusCode === 409) {
                 if (vendorSockets[cleanPhone]) {
                     vendorSockets[cleanPhone].ev.removeAllListeners('creds.update');
@@ -335,7 +388,10 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
             }
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             delete vendorSockets[cleanPhone]; 
-            if (shouldReconnect) setTimeout(() => spawnVendorAgent(cleanPhone, storeName, false), statusCode === 515 ? 1000 : 5000);
+            if (shouldReconnect) {
+                console.log(`🔄 [Vendor Agent: ${storeName}] Reconnecting in ${statusCode === 515 ? '1s' : '10s'}...`);
+                setTimeout(() => spawnVendorAgent(cleanPhone, storeName, false), statusCode === 515 ? 1000 : 10000);
+            }
         }
     });
 
@@ -358,7 +414,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                 const lowerText = textMessage.toLowerCase().trim();
                 const cleanRemoteJidNumber = cleanPhoneNumber(remoteJid);
 
-                // 🛠️ LID BYPASS: WhatsApp sometimes sends LIDs instead of phone JIDs
+                // 🛠️ LID BYPASS
                 const altJid = msg.key.remoteJidAlt || msg.key.participantAlt || "";
                 const cleanAltNumber = cleanPhoneNumber(altJid);
                 const isVendorSelfChat = cleanRemoteJidNumber === cleanPhone || cleanAltNumber === cleanPhone || (msg.key.fromMe && remoteJid.includes(cleanPhone));
@@ -375,7 +431,6 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                 }
 
                 if (isVendorSelfChat) {
-                    // 🛠️ AI TOGGLE
                     if (lowerText === 'ai off') {
                         await Vendor.findOneAndUpdate({ phoneNumber: cleanPhone }, { aiActive: false });
                         await vendorSock.sendMessage(remoteJid, { text: `🛑 AI Agent is now OFF.` });
@@ -429,8 +484,6 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                 }
 
                 if (msg.key.fromMe) continue;
-
-                // 🛠️ STOP if AI is toggled off
                 if (!vendorData || vendorData.aiActive === false) continue;
 
                 const activeProducts = await Product.find({ vendorPhone: cleanPhone });
@@ -465,7 +518,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 
                 const catalog = activeProducts.map(p => `- ${p.name}: ₦${p.price}`).join("\n");
 
-                // 🛠️ STRICT AI PROMPT: prevents price hallucination
+                // 🛠️ STRICT AI PROMPT
                 const customerAI = await openai.chat.completions.create({
                     model: "gpt-4o-mini",
                     messages: [
@@ -519,7 +572,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 }
 
 // ----------------------------------------------------
-// 5. MASTER ONBOARDING AGENT SOCKET (DIAGNOSTIC ENHANCED)
+// 5. MASTER ONBOARDING AGENT SOCKET
 // ----------------------------------------------------
 async function startNaxrMasterAgent(isReconnect = false) {
     const { state, saveCreds } = await useMongoDBAuthState('master_agent_session'); 
@@ -535,7 +588,6 @@ async function startNaxrMasterAgent(isReconnect = false) {
 
     globalSock = sock;
 
-    // 🛑 1. ATTACH LISTENERS IMMEDIATELY (Do not block the thread)
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
@@ -609,6 +661,23 @@ async function startNaxrMasterAgent(isReconnect = false) {
                         await sock.sendMessage(remoteJid, { text: `👑 *Naxr Super Admin*\n\n👥 Total Vendors: ${totalVendors}\n✅ Total Paid Orders: ${totalOrders}` });
                         continue;
                     }
+
+                    // 🛠️ DISSOLVE ALL COMMAND
+                    if (lowerText === 'admin dissolve all' || lowerText === 'admin purge all') {
+                        await sock.sendMessage(remoteJid, { text: `⚠️ *INITIATING FULL DISSOLUTION...*\n\nDisconnecting all vendors and wiping all data...` });
+                        const result = await dissolveAllVendors();
+                        await sock.sendMessage(remoteJid, { 
+                            text: `✅ *ALL VENDORS DISSOLVED SUCCESSFULLY!*\n\n` +
+                                  `🗑️ Vendors: ${result.vendors}\n` +
+                                  `🗑️ Products: ${result.products}\n` +
+                                  `🗑️ Orders: ${result.orders}\n` +
+                                  `🗑️ Sessions: ${result.sessions}\n` +
+                                  `🔑 Auth States: ${result.auths}\n\n` +
+                                  `🚀 The Master Agent is still live. You can now start onboarding new vendors!`
+                        });
+                        continue;
+                    }
+
                     if (lowerText.startsWith('delete vendor ')) {
                         const targetPhone = cleanPhoneNumber(lowerText.replace('delete vendor', '').trim());
                         await Vendor.deleteOne({ phoneNumber: targetPhone });
@@ -784,12 +853,10 @@ async function startNaxrMasterAgent(isReconnect = false) {
         }
     });
 
-    // 🛑 2. REQUEST PAIRING CODE AFTER SETUP (Non-Blocking)
     if (!sock.authState.creds.registered && !isReconnect) {
         const myNumber = cleanPhoneNumber(ADMIN_PHONE);
         console.log(`\n📱 Formatting Admin Phone: ${myNumber} ... Waiting for socket to open...`);
         
-        // Wait 4 seconds in the background so the socket actually establishes connection
         setTimeout(async () => {
             try {
                 console.log(`\n📱 Attempting to request Master Pairing Code now...`);
@@ -841,13 +908,25 @@ app.post('/paystack-webhook', async (req, res) => {
 async function bootAllVendors() {
     try {
         const vendors = await Vendor.find({});
+        console.log(`📋 Found ${vendors.length} vendors in database. Staggering connections...`);
+        
         for (const v of vendors) {
             const cleanPhone = cleanPhoneNumber(v.phoneNumber);
             if (!cleanPhone) continue;
-            await delay(8000); 
+            
+            // 🛠️ Check if vendor has valid MongoDB auth before trying to connect
+            const hasAuth = await Auth.exists({ _id: { $regex: `^vendor_${cleanPhone}` } });
+            if (!hasAuth) {
+                console.log(`⏭️ [Auto-Boot] SKIPPING ${v.storeName} (${cleanPhone}) — no auth in DB. Vendor must message LINK.`);
+                continue;
+            }
+            
+            await delay(15000); // 🛠️ 15s between vendors to avoid 408 timeouts
             spawnVendorAgent(cleanPhone, v.storeName, false);
         }
-    } catch (err) {}
+    } catch (err) {
+        console.error("❌ Boot All Vendors Error:", err);
+    }
 }
 
 app.get('/', (req, res) => res.send('Naxr AI Engine Active! 🚀'));
