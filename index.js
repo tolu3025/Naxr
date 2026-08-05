@@ -234,6 +234,8 @@ function cleanPhoneNumber(rawPhone) {
     if (!rawPhone) return "";
     let basePhone = rawPhone.split('@')[0].split(':')[0]; 
     let cleaned = basePhone.replace(/[^0-9]/g, '');
+    // Prevent double-prefixing if 234 is already present
+    if (cleaned.startsWith('234') && cleaned.length === 13) return cleaned;
     if (cleaned.startsWith('0')) cleaned = '234' + cleaned.substring(1);
     else if (cleaned.length === 10) cleaned = '234' + cleaned;
     return cleaned;
@@ -314,7 +316,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
             auth: state,
             logger: pino({ level: 'error' }),
             printQRInTerminal: false,
-            browser: ["Chrome (Windows)", "Chrome", "110.0.0.0"], 
+            browser: ['Chrome (Linux)', 'Chrome', '22.04.0'], 
             syncFullHistory: false, 
             keepAliveIntervalMs: 30000,
             connectTimeoutMs: 30000,
@@ -327,7 +329,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 
         let pairingCode = null;
         if (!vendorSock.authState.creds.registered && requestNewCode) {
-            await delay(3000); 
+            await delay(5000); 
             try {
                 pairingCode = await vendorSock.requestPairingCode(cleanPhone);
                 console.log(`\n🔑 PAIRING CODE FOR ${storeName} (${cleanPhone}): ${pairingCode}\n`);
@@ -566,7 +568,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
         auth: state,
         logger: pino({ level: 'error' }),
         printQRInTerminal: false,
-        browser: ["Ubuntu", "Chrome", "110.0.0"], 
+        browser: ['Chrome (Linux)', 'Chrome', '22.04.0'], 
         syncFullHistory: false, 
         keepAliveIntervalMs: 30000
     });
@@ -789,7 +791,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
             } catch (err) {
                 console.error(`❌ Master Pairing Error:`, err?.message);
             }
-        }, 4000);
+        }, 5000);
     }
 }
 
