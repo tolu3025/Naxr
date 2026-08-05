@@ -6,7 +6,8 @@ const {
     proto, 
     delay, 
     downloadMediaMessage,
-    DisconnectReason 
+    DisconnectReason,
+    useMultiFileAuthState  // 🛠️ IMPORTED for vendors
 } = require('@whiskeysockets/baileys');
 const { OpenAI } = require('openai');
 const pino = require('pino');
@@ -88,6 +89,7 @@ const RegSession = mongoose.model('RegSession', new mongoose.Schema({
 
 const Auth = mongoose.model('Auth', new mongoose.Schema({ _id: String, data: String }));
 
+// 🛠️ MASTER AGENT: MongoDB Auth State (Cloud Persistent)
 async function useMongoDBAuthState(sessionId = 'creds') {
     const writeData = async (data, id) => {
         await Auth.updateOne({ _id: `${sessionId}-${id}` }, { $set: { data: JSON.stringify(data, BufferJSON.replacer) } }, { upsert: true });
@@ -247,25 +249,38 @@ async function dissolveAllVendors() {
         }
     }
     
+    // 🛠️ Delete vendor auth folders
+    const authBasePath = path.join(process.cwd(), 'auth_vendors');
+    if (fs.existsSync(authBasePath)) {
+        const folders = fs.readdirSync(authBasePath);
+        for (const folder of folders) {
+            if (folder.startsWith('vendor_')) {
+                try {
+                    fs.rmSync(path.join(authBasePath, folder), { recursive: true, force: true });
+                    console.log(`🗑️ [DISSOLVE] Deleted auth folder: ${folder}`);
+                } catch (e) {
+                    console.error(`❌ [DISSOLVE] Failed to delete folder ${folder}:`, e.message);
+                }
+            }
+        }
+    }
+    
     const vendorDelete = await Vendor.deleteMany({});
     const productDelete = await Product.deleteMany({});
     const orderDelete = await Order.deleteMany({});
     const sessionDelete = await RegSession.deleteMany({});
-    const authDelete = await Auth.deleteMany({ _id: { $regex: '^vendor_' } });
     
     console.log(`✅ [DISSOLVE] Complete!`);
     console.log(`   - Vendors deleted: ${vendorDelete.deletedCount}`);
     console.log(`   - Products deleted: ${productDelete.deletedCount}`);
     console.log(`   - Orders deleted: ${orderDelete.deletedCount}`);
     console.log(`   - Sessions deleted: ${sessionDelete.deletedCount}`);
-    console.log(`   - Auth states deleted: ${authDelete.deletedCount}`);
     
     return {
         vendors: vendorDelete.deletedCount,
         products: productDelete.deletedCount,
         orders: orderDelete.deletedCount,
-        sessions: sessionDelete.deletedCount,
-        auths: authDelete.deletedCount
+        sessions: sessionDelete.deletedCount
     };
 }
 
@@ -307,7 +322,7 @@ function cleanPhoneNumber(rawPhone) {
 }
 
 // ----------------------------------------------------
-// 4. VENDOR AGENT SPAWN
+// 4. VENDOR AGENT SPAWN (FILE-BASED AUTH + WINDOWS CHROME)
 // ----------------------------------------------------
 async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
     const cleanPhone = cleanPhoneNumber(realPhone);
@@ -330,17 +345,25 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
         return null;
     }
 
-    const { state, saveCreds } = await useMongoDBAuthState(`vendor_${cleanPhone}`);
+    // 🛠️ CRITICAL FIX: Use file-based auth state (previous working method)
+    const authFolder = path.join(process.cwd(), 'auth_vendors', `vendor_${cleanPhone}`);
+    if (!fs.existsSync(path.dirname(authFolder))) {
+        fs.mkdirSync(path.dirname(authFolder), { recursive: true });
+    }
+    
+    const { state, saveCreds } = await useMultiFileAuthState(authFolder);
     
     const vendorSock = makeWASocket({
         auth: state,
         logger: pino({ level: 'error' }),
         printQRInTerminal: false,
-        browser: ["Ubuntu", "Chrome", "110.0.0"], 
+        // 🛠️ CRITICAL FIX: Windows Chrome browser to avoid "scam" warning
+        browser: ["Chrome (Windows)", "Chrome", "110.0.0.0"], 
         syncFullHistory: false, 
         keepAliveIntervalMs: 30000,
         connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 60000
+        defaultQueryTimeoutMs: 60000,
+        markOnlineOnConnect: false
     });
 
     vendorSockets[cleanPhone] = vendorSock;
@@ -410,7 +433,8 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     vendorSockets[cleanPhone].ev.removeAllListeners('connection.update');
                     delete vendorSockets[cleanPhone];
                 }
-                await Auth.deleteMany({ _id: { $regex: `^vendor_${cleanPhone}` } });
+                // 🛠️ Clear file-based auth on hard failures
+                try { fs.rmSync(authFolder, { recursive: true, force: true }); } catch(e){}
                 return; 
             }
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
@@ -597,7 +621,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 }
 
 // ----------------------------------------------------
-// 5. MASTER ONBOARDING AGENT SOCKET
+// 5. MASTER ONBOARDING AGENT SOCKET (MONGO AUTH)
 // ----------------------------------------------------
 async function startNaxrMasterAgent(isReconnect = false) {
     const { state, saveCreds } = await useMongoDBAuthState('master_agent_session'); 
@@ -686,7 +710,6 @@ async function startNaxrMasterAgent(isReconnect = false) {
                         continue;
                     }
 
-                    // 🛠️ DISSOLVE ALL COMMAND
                     if (lowerText === 'admin dissolve all' || lowerText === 'admin purge all') {
                         await sock.sendMessage(remoteJid, { text: `⚠️ *INITIATING FULL DISSOLUTION...*\n\nDisconnecting all vendors and wiping all data...` });
                         const result = await dissolveAllVendors();
@@ -695,8 +718,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
                                   `🗑️ Vendors: ${result.vendors}\n` +
                                   `🗑️ Products: ${result.products}\n` +
                                   `🗑️ Orders: ${result.orders}\n` +
-                                  `🗑️ Sessions: ${result.sessions}\n` +
-                                  `🔑 Auth States: ${result.auths}\n\n` +
+                                  `🗑️ Sessions: ${result.sessions}\n\n` +
                                   `🚀 The Master Agent is still live. You can now start onboarding new vendors!`
                         });
                         continue;
@@ -712,7 +734,8 @@ async function startNaxrMasterAgent(isReconnect = false) {
                             try { vendorSockets[targetPhone].ws.close(); } catch(e){}
                             delete vendorSockets[targetPhone];
                         }
-                        await Auth.deleteMany({ _id: { $regex: `^vendor_${targetPhone}` } });
+                        // 🛠️ Also delete file auth folder
+                        try { fs.rmSync(path.join(process.cwd(), 'auth_vendors', `vendor_${targetPhone}`), { recursive: true, force: true }); } catch(e){}
                         await sock.sendMessage(remoteJid, { text: `✅ Vendor ${targetPhone} purged.` });
                         continue;
                     }
@@ -727,7 +750,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
                             try { vendorSockets[targetPhone].ws.close(); } catch(e){}
                             delete vendorSockets[targetPhone];
                         }
-                        await Auth.deleteMany({ _id: { $regex: `^vendor_${targetPhone}` } });
+                        try { fs.rmSync(path.join(process.cwd(), 'auth_vendors', `vendor_${targetPhone}`), { recursive: true, force: true }); } catch(e){}
                         await Vendor.deleteOne({ jid: remoteJid });
                     }
                     await RegSession.deleteOne({ phoneNumber: remoteJid });
@@ -750,7 +773,8 @@ async function startNaxrMasterAgent(isReconnect = false) {
                             delete vendorSockets[targetPhone];
                             await delay(1500); 
                         }
-                        await Auth.deleteMany({ _id: { $regex: `^vendor_${targetPhone}` } });
+                        // 🛠️ Clear old file auth before generating new code
+                        try { fs.rmSync(path.join(process.cwd(), 'auth_vendors', `vendor_${targetPhone}`), { recursive: true, force: true }); } catch(e){}
 
                         const newCode = await spawnVendorAgent(targetPhone, existingVendor.storeName, true);
                         if (newCode && newCode !== "ALREADY_ACTIVE" && newCode !== "ERROR") {
@@ -823,7 +847,8 @@ async function startNaxrMasterAgent(isReconnect = false) {
                             delete vendorSockets[targetPhone];
                             await delay(1500);
                         }
-                        await Auth.deleteMany({ _id: { $regex: `^vendor_${targetPhone}` } });
+                        // 🛠️ Clear old auth folder before spawning fresh
+                        try { fs.rmSync(path.join(process.cwd(), 'auth_vendors', `vendor_${targetPhone}`), { recursive: true, force: true }); } catch(e){}
 
                         const pairingCode = await spawnVendorAgent(targetPhone, session.storeName, true);
                         await RegSession.deleteOne({ phoneNumber: remoteJid });
