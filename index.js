@@ -238,18 +238,25 @@ function cleanPhoneNumber(rawPhone) {
 }
 
 // ----------------------------------------------------
-// 4. VENDOR AGENT SPAWN
+// 4. VENDOR AGENT SPAWN (DIAGNOSTIC ENHANCED)
 // ----------------------------------------------------
 async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
     const cleanPhone = cleanPhoneNumber(realPhone);
-    if (!cleanPhone) return null;
+    if (!cleanPhone) {
+        console.error(`❌ [Vendor Agent Error] Invalid phone number provided: "${realPhone}"`);
+        return null;
+    }
 
     if (vendorSockets[cleanPhone]) {
         const sock = vendorSockets[cleanPhone];
         if (sock.authState.creds.registered) return "ALREADY_ACTIVE";
         if (requestNewCode) {
-            try { return await sock.requestPairingCode(cleanPhone); } 
-            catch (err) { return "ERROR"; }
+            try { 
+                return await sock.requestPairingCode(cleanPhone); 
+            } catch (err) { 
+                console.error(`❌ [Vendor Agent Error] Pairing code request failed for ${cleanPhone}:`, err?.message || err);
+                return "ERROR"; 
+            }
         }
         return null;
     }
@@ -274,7 +281,10 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
         try {
             pairingCode = await vendorSock.requestPairingCode(cleanPhone);
             console.log(`\n🔑 VALID VENDOR PAIRING CODE FOR ${storeName} (${cleanPhone}): ${pairingCode}\n`);
-        } catch (err) { pairingCode = "ERROR"; }
+        } catch (err) { 
+            console.error(`❌ [Vendor Agent Error] Meta rejected pairing code for ${cleanPhone}:`, err);
+            pairingCode = "ERROR"; 
+        }
     } else if (vendorSock.authState.creds.registered) {
         pairingCode = "ALREADY_ACTIVE";
     }
@@ -282,6 +292,10 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
     vendorSock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
         
+        if (connection) {
+            console.log(`🔄 [Vendor Agent: ${storeName}] Connection state: ${connection}`);
+        }
+
         if (connection === 'open') {
             console.log(`🚀 Vendor Agent LIVE for ${storeName} (${cleanPhone})!`);
             try {
@@ -304,7 +318,10 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
         }
         
         if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const error = lastDisconnect?.error;
+            const statusCode = error?.output?.statusCode || error?.output?.payload?.statusCode;
+            console.error(`❌ [Vendor Agent: ${storeName}] Closed with status: ${statusCode}`, error?.message || "");
+
             if (statusCode === 440 || statusCode === 401 || statusCode === 428 || statusCode === 409) {
                 if (vendorSockets[cleanPhone]) {
                     vendorSockets[cleanPhone].ev.removeAllListeners('creds.update');
@@ -477,7 +494,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 }
 
 // ----------------------------------------------------
-// 5. MASTER ONBOARDING AGENT SOCKET
+// 5. MASTER ONBOARDING AGENT SOCKET (DIAGNOSTIC ENHANCED)
 // ----------------------------------------------------
 async function startNaxrMasterAgent(isReconnect = false) {
     const { state, saveCreds } = await useMongoDBAuthState('master_agent_session'); 
@@ -492,27 +509,51 @@ async function startNaxrMasterAgent(isReconnect = false) {
     });
 
     globalSock = sock;
+
+    // 🛑 1. ATTACH LISTENERS IMMEDIATELY (Do not block the thread)
     sock.ev.on('creds.update', saveCreds);
 
-    if (!sock.authState.creds.registered && !isReconnect) {
-        await delay(4000);
-        const myNumber = cleanPhoneNumber(ADMIN_PHONE);
-        try {
-            const code = await sock.requestPairingCode(myNumber);
-            console.log(`\n======================================`);
-            console.log(`🔑 NAXR MASTER PAIRING CODE: ${code}`);
-            console.log(`======================================\n`);
-        } catch (err) { }
-    }
-
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
-        if (connection === 'open') console.log("🚀 NAXR MASTER ONBOARDING AGENT IS LIVE! 🇳🇬");
+        const { connection, lastDisconnect, isNewLogin } = update;
+        
+        if (connection) {
+            console.log(`🔄 [Master Agent] Connection status changed to: "${connection}"`);
+        }
+
+        if (isNewLogin) {
+            console.log(`🎉 [Master Agent] New device pairing handshake completed successfully!`);
+        }
+
+        if (connection === 'open') {
+            console.log("🚀 NAXR MASTER ONBOARDING AGENT IS LIVE! 🇳🇬");
+        }
+
         if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const error = lastDisconnect?.error;
+            const statusCode = error?.output?.statusCode || error?.output?.payload?.statusCode;
+
+            console.error(`❌ [Master Agent Connection Closed]`);
+            console.error(`--> Status Code: ${statusCode}`);
+            console.error(`--> Error Summary: ${error?.message || "Unknown disconnect"}`);
+            
+            if (statusCode === 401) {
+                console.error("⛔ [401 Unauthorized] Session keys invalidated or unlinked on phone.");
+            } else if (statusCode === 408) {
+                console.error("⏳ [408 Request Timeout] Handshake timed out before phone confirmed code.");
+            } else if (statusCode === 409) {
+                console.error("⚠️ [409 Conflict] Another socket connection is already active with these credentials.");
+            } else if (statusCode === 428) {
+                console.error("⚠️ [428 Connection Closed] Preemptive socket closure by server.");
+            } else if (statusCode === 515) {
+                console.error("🔄 [515 Restart Required] Baileys stream reset (normal automatic reconnect).");
+            }
+
             if (statusCode === 440 || statusCode === 409) return; 
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) setTimeout(() => startNaxrMasterAgent(true), statusCode === 515 ? 1000 : 5000);
+            if (shouldReconnect) {
+                console.log("🔄 Reconnecting Master Agent in 5 seconds...");
+                setTimeout(() => startNaxrMasterAgent(true), statusCode === 515 ? 1000 : 5000);
+            }
         }
     });
 
@@ -712,6 +753,26 @@ async function startNaxrMasterAgent(isReconnect = false) {
             } catch (error) { console.error(`❌ Message Error:`, error); }
         }
     });
+
+    // 🛑 2. REQUEST PAIRING CODE AFTER SETUP (Non-Blocking)
+    if (!sock.authState.creds.registered && !isReconnect) {
+        const myNumber = cleanPhoneNumber(ADMIN_PHONE);
+        console.log(`\n📱 Formatting Admin Phone: ${myNumber} ... Waiting for socket to open...`);
+        
+        // Wait 4 seconds in the background so the socket actually establishes connection
+        setTimeout(async () => {
+            try {
+                console.log(`\n📱 Attempting to request Master Pairing Code now...`);
+                const code = await sock.requestPairingCode(myNumber);
+                console.log(`\n======================================`);
+                console.log(`🔑 NAXR MASTER PAIRING CODE: ${code}`);
+                console.log(`======================================\n`);
+            } catch (err) {
+                console.error(`\n❌ [MASTER PAIRING ERROR] Meta rejected the pairing code request:`);
+                console.error(`Error Message: ${err?.message || err}`);
+            }
+        }, 4000);
+    }
 }
 
 // ----------------------------------------------------
