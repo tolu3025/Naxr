@@ -20,15 +20,8 @@ const path = require('path');
 const os = require('os');
 
 // ----------------------------------------------------
-// 0. ENVIRONMENT & LIVE MODE CONFIG
+// 1. CONFIGURATION & MONGO DB
 // ----------------------------------------------------
-const isLiveMode = () => {
-    const key = process.env.PAYSTACK_SECRET_KEY || '';
-    return key.startsWith('sk_live_');
-};
-
-const PAYSTACK_DVA_BANK = process.env.PAYSTACK_DVA_BANK || 'wema-bank'; // or 'titan-paystack'
-
 cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
@@ -37,11 +30,7 @@ cloudinary.config({
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const app = express();
-
-// CRITICAL: Capture raw body for Paystack HMAC verification
-app.use(express.json({
-    verify: (req, res, buf) => { req.rawBody = buf; }
-}));
+app.use(express.json());
 
 mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log("📦 Connected to MongoDB Atlas Cloud!"))
@@ -158,54 +147,57 @@ async function transcribeVoiceNote(msg) {
 }
 
 // ----------------------------------------------------
-// 2. PAYSTACK LIVE ENGINE
+// 2. PAYSTACK VIRTUAL ACCOUNT ENGINE (LIVE MODE)
 // ----------------------------------------------------
 async function createVendorSubaccount(storeName, bankNameRaw, accountNumber) {
-    if (!process.env.PAYSTACK_SECRET_KEY) throw new Error("PAYSTACK_SECRET_KEY missing");
+    try {
+        if (!process.env.PAYSTACK_SECRET_KEY) throw new Error("No API key");
 
-    const banksRes = await axios.get('https://api.paystack.co/bank', { 
-        headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }
-    });
-    const banks = banksRes.data.data;
-    const bank = banks.find(b => b.name.toLowerCase().includes(bankNameRaw.toLowerCase().trim()));
+        const banksRes = await axios.get('https://api.paystack.co/bank', { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }});
+        const banks = banksRes.data.data;
+        const bank = banks.find(b => b.name.toLowerCase().includes(bankNameRaw.toLowerCase().trim())) || banks[0];
 
-    if (!bank) throw new Error(`Bank "${bankNameRaw}" not found on Paystack. Please use a valid Nigerian bank name.`);
+        const subRes = await axios.post('https://api.paystack.co/subaccount', {
+            business_name: storeName,
+            settlement_bank: bank.code,
+            account_number: accountNumber,
+            percentage_charge: 2.0 
+        }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }});
 
-    const subRes = await axios.post('https://api.paystack.co/subaccount', {
-        business_name: storeName,
-        settlement_bank: bank.code,
-        account_number: accountNumber,
-        percentage_charge: parseFloat(process.env.NAXR_COMMISSION_PERCENT || '2.0')
-    }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }});
-
-    return subRes.data.data.subaccount_code;
+        return subRes.data.data.subaccount_code;
+    } catch (error) {
+        console.error("⚠️ Paystack Subaccount Error:", error?.response?.data || error.message);
+        throw new Error("Failed to create vendor subaccount. Please verify your live Paystack keys and bank details.");
+    }
 }
 
 async function createVirtualAccount(customerPhone, vendorSubaccount) {
-    if (!process.env.PAYSTACK_SECRET_KEY) throw new Error("PAYSTACK_SECRET_KEY missing");
+    try {
+        if (!process.env.PAYSTACK_SECRET_KEY) throw new Error("No API key");
+        
+        const custRes = await axios.post('https://api.paystack.co/customer', {
+            email: `buyer_${customerPhone}_${Date.now()}@naxr.test`,
+            first_name: "Naxr",
+            last_name: "Customer",
+            phone: customerPhone
+        }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }});
+        
+        const customerCode = custRes.data.data.customer_code;
 
-    // Create customer
-    const custRes = await axios.post('https://api.paystack.co/customer', {
-        email: `buyer_${customerPhone}_${Date.now()}@naxr.app`,
-        first_name: "Naxr",
-        last_name: "Customer",
-        phone: customerPhone
-    }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }});
-    
-    const customerCode = custRes.data.data.customer_code;
+        const dvaRes = await axios.post('https://api.paystack.co/dedicated_account', {
+            customer: customerCode
+        }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }});
 
-    // Create Dedicated Virtual Account (DVA)
-    const dvaRes = await axios.post('https://api.paystack.co/dedicated_account', {
-        customer: customerCode,
-        preferred_bank: PAYSTACK_DVA_BANK
-    }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }});
-
-    return {
-        accountNumber: dvaRes.data.data.account_number,
-        bankName: dvaRes.data.data.bank.name,
-        accountName: dvaRes.data.data.account_name,
-        customerCode: customerCode
-    };
+        return {
+            accountNumber: dvaRes.data.data.account_number,
+            bankName: dvaRes.data.data.bank.name,
+            accountName: dvaRes.data.data.account_name,
+            isTestMode: false
+        };
+    } catch (error) {
+        console.error("⚠️ Paystack Virtual Account Error:", error?.response?.data || error.message);
+        throw new Error("Failed to create virtual account. Please verify your live Paystack keys.");
+    }
 }
 
 // ----------------------------------------------------
@@ -304,10 +296,8 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
             try {
                 const vendorData = await Vendor.findOne({ phoneNumber: cleanPhone });
                 if (vendorData && !vendorData.docsSent) {
-                    const modeText = isLiveMode() ? "🔴 LIVE MODE" : "🟡 TEST MODE";
                     const docsMessage = `🎉 *CONGRATULATIONS! YOUR NAXR AI AGENT IS NOW LIVE!* 🚀\n\n` +
                     `Your 7-Day Free Trial has officially started! Naxr AI is managing sales for *${storeName}*.\n\n` +
-                    `${modeText}\n\n` +
                     `🔒 *PRIVACY & SECURITY GUARANTEE*\n` +
                     `Your WhatsApp is completely safe. Naxr AI operates under strict privacy rules. We do NOT read your personal chats. The AI ONLY wakes up when a customer explicitly uses "buying intent" words. Your privacy is 100% protected.\n\n` +
                     `📖 *QUICK OPERATIONAL GUIDE*\n` +
@@ -386,6 +376,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 
                 // ─── VENDOR SELF-CHAT ADMIN CONTROLS ───
                 if (isVendorSelfChat) {
+                    // AI ON / OFF
                     if (lowerText === 'ai off') {
                         await Vendor.findOneAndUpdate({ phoneNumber: cleanPhone }, { aiActive: false });
                         await vendorSock.sendMessage(remoteJid, { text: `🛑 *AI Agent is now OFF.*\n\nCustomers will no longer receive automated replies until you turn it back on.` });
@@ -397,6 +388,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
+                    // STATS
                     if (lowerText === 'stats' || lowerText === 'sales' || lowerText === 'dashboard') {
                         const salesCount = await Order.countDocuments({ vendorPhone: cleanPhone, status: 'PAID' });
                         const pendingCount = await Order.countDocuments({ vendorPhone: cleanPhone, status: 'PENDING' });
@@ -409,10 +401,9 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         
                         let trialText = vendorData?.isPro ? "✅ Pro Plan Active" : `⏳ Free Trial: ${Math.max(7 - Math.floor((Date.now() - new Date(vendorData.createdAt).getTime()) / (1000 * 60 * 60 * 24)), 0)} days left`;
                         let aiStatus = vendorData?.aiActive !== false ? "🟢 AI ON" : "🔴 AI OFF";
-                        let modeBadge = isLiveMode() ? "🔴 LIVE" : "🟡 TEST";
                         
                         await vendorSock.sendMessage(remoteJid, { 
-                            text: `📊 *${storeName} Admin Dashboard* [${modeBadge}]\n\n` +
+                            text: `📊 *${storeName} Admin Dashboard*\n\n` +
                                   `🛍️ Active Products: ${productsCount}\n` +
                                   `✅ Confirmed Paid Sales: ${salesCount}\n` +
                                   `⏳ Pending Orders: ${pendingCount}\n` +
@@ -422,6 +413,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     } 
 
+                    // ANALYTICS (enhanced stats)
                     if (lowerText === 'analytics') {
                         const paidOrders = await Order.find({ vendorPhone: cleanPhone, status: 'PAID' }).sort({ createdAt: -1 }).limit(5);
                         const pendingOrders = await Order.find({ vendorPhone: cleanPhone, status: 'PENDING' }).sort({ createdAt: -1 }).limit(5);
@@ -449,6 +441,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
+                    // PRODUCTS
                     if (lowerText === 'products' || lowerText === 'catalog') {
                         const activeProducts = await Product.find({ vendorPhone: cleanPhone });
                         const catalogText = activeProducts.length > 0 
@@ -458,6 +451,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     } 
 
+                    // EDIT DESCRIPTION
                     if (lowerText.startsWith('edit description ')) {
                         const newDesc = textMessage.substring(17).trim();
                         await Vendor.updateOne({ phoneNumber: cleanPhone }, { description: newDesc });
@@ -465,6 +459,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
+                    // DELETE PRODUCT
                     if (lowerText.startsWith('delete product ')) {
                         const prodName = textMessage.substring(15).trim();
                         const res = await Product.deleteOne({ vendorPhone: cleanPhone, name: { $regex: new RegExp(prodName, 'i') } });
@@ -473,11 +468,8 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
+                    // CONFIRM TEST PAYMENT (manual test mode)
                     if (lowerText === 'confirm test' || lowerText === 'test confirm') {
-                        if (isLiveMode()) {
-                            await vendorSock.sendMessage(remoteJid, { text: `🚫 *LIVE MODE:* Manual test confirmation is disabled while running live Paystack keys.` });
-                            continue;
-                        }
                         const pendingOrder = await Order.findOne({ vendorPhone: cleanPhone, status: 'PENDING' }).sort({ createdAt: -1 });
                         if (!pendingOrder) {
                             await vendorSock.sendMessage(remoteJid, { text: `⚠️ No pending test orders found.` });
@@ -495,6 +487,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
+                    // ADD PRODUCT VIA IMAGE
                     if (isImage) {
                         const match = textMessage.match(/\d+/);
                         if (match) {
@@ -511,6 +504,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
+                    // HELP
                     if (lowerText === 'help') {
                         await vendorSock.sendMessage(remoteJid, { 
                             text: `💡 *Naxr Vendor Commands:*\n` +
@@ -520,12 +514,13 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                                   `• *ai on* / *ai off* — Toggle AI\n` +
                                   `• *edit description [text]*\n` +
                                   `• *delete product [name]*\n` +
-                                  `• *confirm test* — Confirm test payment (test only)\n` +
+                                  `• *confirm test* — Confirm test payment\n` +
                                   `• Send image + price to add product` 
                         });
                         continue;
                     }
 
+                    // Unrecognized self-chat message
                     continue; 
                 }
 
@@ -581,16 +576,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         
                         await vendorSock.sendMessage(remoteJid, { text: `⏳ Generating secure Virtual Account via Paystack...` });
 
-                        let virtualAcc;
-                        try {
-                            virtualAcc = await createVirtualAccount(cleanRemoteJidNumber, vendorData.subaccountCode);
-                        } catch (paystackErr) {
-                            console.error("Paystack DVA Error:", paystackErr?.response?.data || paystackErr.message);
-                            await vendorSock.sendMessage(remoteJid, { 
-                                text: `⚠️ *Payment Setup Error:*\n\nWe couldn't generate a virtual account right now. This might be due to a temporary network issue. Please try again in a moment, or contact the vendor directly.` 
-                            });
-                            continue;
-                        }
+                        const virtualAcc = await createVirtualAccount(cleanRemoteJidNumber, vendorData.subaccountCode);
                         
                         await Order.create({
                             vendorPhone: cleanPhone,
@@ -601,6 +587,10 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                             status: 'PENDING'
                         });
                         
+                        const testWarning = virtualAcc.isTestMode 
+                            ? `\n\n⚠️ *TEST MODE ACTIVE:* This is a test virtual account. Payments will NOT auto-confirm via webhook.\n_Vendor can manually confirm with "confirm test" in their admin chat._`
+                            : '';
+
                         await vendorSock.sendMessage(remoteJid, { 
                             text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
                                   `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
@@ -608,11 +598,11 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                                   `Bank: *${virtualAcc.bankName}*\n` +
                                   `Account No: *${virtualAcc.accountNumber}*\n` +
                                   `Name: *${virtualAcc.accountName}*\n\n` +
-                                  `_This virtual account is strictly for this transaction. Our AI system will automatically confirm your order once the transfer is received!_ ✨`
+                                  `_This virtual account is strictly for this transaction. Our AI system will automatically confirm your order once the transfer is received!_ ✨` +
+                                  testWarning
                         });
                     } catch (e) {
-                        console.error("Order processing error:", e);
-                        await vendorSock.sendMessage(remoteJid, { text: "⚠️ Could not process your order at this time. Please try again shortly." });
+                        await vendorSock.sendMessage(remoteJid, { text: "⚠️ Could not generate a payment account at this time." });
                     }
                 } else {
                     await vendorSock.sendMessage(remoteJid, { text: reply });
@@ -688,8 +678,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
                         const totalVendors = await Vendor.countDocuments({});
                         const totalOrders = await Order.countDocuments({ status: 'PAID' });
                         const totalProducts = await Product.countDocuments({});
-                        const modeBadge = isLiveMode() ? "🔴 LIVE" : "🟡 TEST";
-                        await sock.sendMessage(remoteJid, { text: `👑 *Naxr Super Admin* [${modeBadge}]\n\n👥 Total Vendors: ${totalVendors}\n🛍️ Total Products Listed: ${totalProducts}\n✅ Total Paid Orders: ${totalOrders}` });
+                        await sock.sendMessage(remoteJid, { text: `👑 *Naxr Super Admin*\n\n👥 Total Vendors: ${totalVendors}\n🛍️ Total Products Listed: ${totalProducts}\n✅ Total Paid Orders: ${totalOrders}` });
                         continue;
                     }
                     if (lowerText === 'admin vendors') {
@@ -821,20 +810,13 @@ async function startNaxrMasterAgent(isReconnect = false) {
                     
                     const bankName = parts[0].trim();
                     const accNo = parts[1].replace(/[^0-9]/g, '');
-                    if (accNo.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Account number must be at least 10 digits.\n\n` + getStepPrompt(5) }); continue; }
+                    if (accNo.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Account number must be 10 digits.\n\n` + getStepPrompt(5) }); continue; }
 
                     await sock.sendMessage(remoteJid, { text: `⏳ Setting up auto-withdrawals with Paystack...` });
-                    
-                    let subaccountCode = null;
-                    try {
-                        subaccountCode = await createVendorSubaccount(session.storeName, bankName, accNo);
-                    } catch (subErr) {
-                        console.error("Subaccount creation failed:", subErr?.response?.data || subErr.message);
-                        await sock.sendMessage(remoteJid, { text: `⚠️ *Paystack Warning:* Could not auto-create subaccount. You can still receive payments, but contact support to complete settlement setup.\n\nContinuing...` });
-                    }
+                    const subaccountCode = await createVendorSubaccount(session.storeName, bankName, accNo);
 
                     session.bankDetails = `${bankName} - ${accNo}`;
-                    session.subaccountCode = subaccountCode || `PENDING_${Date.now()}`;
+                    session.subaccountCode = subaccountCode;
                     session.step = 6; await session.save(); await sock.sendMessage(remoteJid, { text: `Bank details saved! 🔒\n\n` + getStepPrompt(6) }); continue; 
                 }
                 
@@ -933,15 +915,11 @@ async function startNaxrMasterAgent(isReconnect = false) {
 }
 
 // ----------------------------------------------------
-// 6. PAYSTACK WEBHOOK (LIVE TRANSACTION VERIFICATION)
+// 6. PAYSTACK WEBHOOK (VERIFY TRANSACTIONS)
 // ----------------------------------------------------
 app.post('/paystack-webhook', async (req, res) => {
     try {
-        const secret = process.env.PAYSTACK_SECRET_KEY;
-        if (!secret) return res.status(500).send('Server misconfigured');
-
-        // Use raw body for accurate HMAC
-        const hash = crypto.createHmac('sha512', secret).update(req.rawBody).digest('hex');
+        const hash = crypto.createHmac('sha512', process.env.PAYSTACK_SECRET_KEY).update(JSON.stringify(req.body)).digest('hex');
         if (hash !== req.headers['x-paystack-signature']) return res.status(400).send('Invalid signature');
         
         res.sendStatus(200); 
@@ -951,19 +929,8 @@ app.post('/paystack-webhook', async (req, res) => {
             const { amount, authorization } = event.data;
             const paidAmount = amount / 100; 
             
-            // Handle multiple possible payload structures
-            const virtualAccountNumber = 
-                authorization?.receiver_bank_account_number || 
-                authorization?.receiver_bank_account?.account_number ||
-                authorization?.account_number;
-
-            if (!virtualAccountNumber) {
-                console.error("Webhook: No virtual account number found in payload", JSON.stringify(event.data.authorization));
-                return;
-            }
-            
             const order = await Order.findOne({ 
-                virtualAccountNumber: virtualAccountNumber, 
+                virtualAccountNumber: authorization.receiver_bank_account.account_number, 
                 status: 'PENDING' 
             });
 
@@ -991,39 +958,6 @@ app.post('/paystack-webhook', async (req, res) => {
 });
 
 // ----------------------------------------------------
-// 6b. TEST PAYMENT CONFIRMATION (MANUAL — TEST ONLY)
-// ----------------------------------------------------
-app.post('/test/confirm-payment', async (req, res) => {
-    if (isLiveMode()) {
-        return res.status(403).json({ success: false, error: 'Test endpoints are disabled in live mode' });
-    }
-    try {
-        const { accountNumber } = req.body;
-        if (!accountNumber) return res.status(400).json({ success: false, error: 'accountNumber required' });
-
-        const order = await Order.findOne({ virtualAccountNumber: accountNumber, status: 'PENDING' });
-        if (!order) return res.status(404).json({ success: false, error: 'No pending order found for this account number' });
-
-        order.status = 'PAID';
-        await order.save();
-
-        const vSock = vendorSockets[order.vendorPhone];
-        if (vSock) {
-            await vSock.sendMessage(`${order.customerPhone}@s.whatsapp.net`, { 
-                text: `✅ *TEST PAYMENT CONFIRMED!*\n\nYour order for *${order.productName}* has been confirmed. 🎉` 
-            });
-            await vSock.sendMessage(`${order.vendorPhone}@s.whatsapp.net`, { 
-                text: `💰 *TEST ORDER CONFIRMED MANUALLY!*\n\nItem: ${order.productName}\nAmount: ₦${order.amount.toLocaleString()}\nCustomer: +${order.customerPhone}` 
-            });
-        }
-
-        res.json({ success: true, message: 'Test payment confirmed', order });
-    } catch (err) {
-        res.status(500).json({ success: false, error: err.message });
-    }
-});
-
-// ----------------------------------------------------
 // 7. AUTO-BOOT ALL VENDORS
 // ----------------------------------------------------
 async function bootAllVendors() {
@@ -1039,15 +973,9 @@ async function bootAllVendors() {
     } catch (err) {}
 }
 
-app.get('/', (req, res) => {
-    const mode = isLiveMode() ? "🔴 LIVE" : "🟡 TEST";
-    res.send(`Naxr AI Engine Active! ${mode} 🚀`);
-});
+app.get('/', (req, res) => res.send('Naxr AI Engine Active! 🚀'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    const mode = isLiveMode() ? "🔴 LIVE MODE" : "🟡 TEST MODE";
-    console.log(`🌐 Server active on port ${PORT} | ${mode}`);
-});
+app.listen(PORT, () => console.log(`🌐 Server active on port ${PORT}`));
 
 startNaxrMasterAgent().then(() => bootAllVendors());
