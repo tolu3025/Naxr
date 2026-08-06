@@ -176,7 +176,7 @@ async function createVirtualAccount(customerPhone, vendorSubaccount) {
         if (!process.env.PAYSTACK_SECRET_KEY) throw new Error("No API key");
         
         const custRes = await axios.post('https://api.paystack.co/customer', {
-            email: `buyer_${customerPhone}_${Date.now()}@naxr.test`,
+            email: `buyer_${customerPhone}_${Date.now()}@naxr.com`,
             first_name: "Naxr",
             last_name: "Customer",
             phone: customerPhone
