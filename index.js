@@ -206,8 +206,54 @@ async function createVirtualAccount(customerPhone, vendorSubaccount) {
 let globalSock = null;
 const vendorSockets = {};
 const ADMIN_PHONE = process.env.ADMIN_PHONE || "2348148698365";
-const REG_TRIGGERS = ['i want to register', 'how do i register', 'register my business', 'know more about this ai', 'hi can i know more', 'register'];
-const BUYING_INTENT_TRIGGERS = ['i want to buy', 'do you have', 'whats the price', "what's the price", 'how much', 'is this available', 'price of', 'catalog', 'catalogue', 'cost of', 'i need to order', 'how to order', 'pay for', 'available', 'buy', 'what do you sell', 'products', 'product list', 'show me'];
+
+const botMessageIds = new Set();
+
+async function safeSendMessage(sock, jid, content, options = {}) {
+    if (!sock) return null;
+    try {
+        const sent = await sock.sendMessage(jid, content, options);
+        if (sent?.key?.id) {
+            botMessageIds.add(sent.key.id);
+            if (botMessageIds.size > 3000) {
+                const firstKey = botMessageIds.values().next().value;
+                botMessageIds.delete(firstKey);
+            }
+        }
+        return sent;
+    } catch (err) {
+        console.error("❌ safeSendMessage Error:", err.message);
+        return null;
+    }
+}
+
+const REG_TRIGGERS = [
+    'i want to register', 'how do i register', 'register my business', 'know more about this ai', 
+    'hi can i know more', 'register', 'registration', 'sign up', 'signup', 'start', 'onboard', 
+    'create store', 'create account', 'join naxr', 'setup bot', 'set up bot', 'link my whatsapp', 
+    'tell me about naxr', 'how does this work', 'how to use naxr', 'get started', 'begin', 'how to register'
+];
+
+const CATALOG_TRIGGERS = [
+    'catalog', 'catalogue', 'products', 'product list', 'what do you sell', 'show me', 
+    'can i see the product', 'can i see products', 'can i see product', 'what are the product available',
+    'what product available', 'what products are available', 'what products do you have', 'what do you have', 
+    'what do u have', 'show products', 'send catalog', 'send catalogue', 'send pictures', 'send photos', 
+    'pictures', 'photos', 'see products', 'view catalog', 'item list', 'list of products', 'all products', 
+    'available products', 'show catalog', 'show catalogue', 'let me see', 'available items', 'items available',
+    'what are your products', 'what do you have available', 'see product', 'view products'
+];
+
+const BUYING_INTENT_TRIGGERS = [
+    'i want to buy', 'want to buy', 'how to buy', 'can i buy', 'i need', 'i want', 'do you have', 
+    'do u have', 'whats the price', 'what is the price', "what's the price", 'how much', 'how much is', 
+    'is this available', 'price', 'price of', 'prices', 'cost', 'cost of', 'catalog', 'catalogue', 
+    'menu', 'items', 'list', 'products', 'product list', 'show me', 'show products', 'send catalog', 
+    'send catalogue', 'send pictures', 'send photos', 'pictures', 'photos', 'available', 'buy', 'order', 
+    'i need to order', 'how to order', 'place order', 'pay for', 'payment', 'how to pay', 'what do you sell', 
+    'what products do you have', 'what items do you have', 'can i see', 'can i see the product', 
+    'can i see products', 'let me see', 'show catalog', 'show catalogue', 'stock'
+];
 
 function getStepPrompt(step, storeName = "") {
     switch(step) {
@@ -347,54 +393,62 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
             try {
                 if (!msg.message) continue;
 
+                // Skip messages sent by our bot itself
+                if (msg.key.id && botMessageIds.has(msg.key.id)) continue;
+
                 const remoteJid = msg.key.remoteJid;
                 if (!remoteJid || remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter')) continue;
-
-                if (msg.key.fromMe && msg.key.id && msg.key.id.startsWith('BAE5')) continue;
 
                 const isImage = !!(msg.message.imageMessage || msg.message.ephemeralMessage?.message?.imageMessage);
                 const isAudio = !!(msg.message.audioMessage || msg.message.ephemeralMessage?.message?.audioMessage);
                 let textMessage = extractMessageText(msg);
 
                 if (isAudio) textMessage = await transcribeVoiceNote(msg);
-                if (!textMessage) continue;
+                if (!textMessage && !isImage) continue;
 
-                const lowerText = textMessage.toLowerCase().trim();
+                const lowerText = textMessage ? textMessage.toLowerCase().trim() : "";
                 const cleanRemoteJidNumber = cleanPhoneNumber(remoteJid);
-                const isVendorSelfChat = cleanRemoteJidNumber === cleanPhone || (msg.key.fromMe && remoteJid.includes(cleanPhone));
+                const cleanVendorPhone = cleanPhone;
 
-                const vendorData = await Vendor.findOne({ phoneNumber: cleanPhone });
-                if (vendorData) {
-                    const daysActive = (Date.now() - new Date(vendorData.createdAt).getTime()) / (1000 * 60 * 60 * 24);
-                    if (daysActive > 7 && !vendorData.isPro) {
-                        if (isVendorSelfChat) {
-                            await vendorSock.sendMessage(remoteJid, { text: `⚠️ *TRIAL EXPIRED:* Your 7-day Naxr AI trial has ended. Your bot is currently paused. Please subscribe to continue enjoying automated sales! 🚀` });
+                const isVendorSelfChat = cleanRemoteJidNumber === cleanVendorPhone || 
+                                         remoteJid.includes(cleanVendorPhone) || 
+                                         remoteJid.endsWith('@lid') || 
+                                         msg.key.fromMe;
+
+                const vendorData = await Vendor.findOne({ phoneNumber: cleanVendorPhone });
+
+                // Check for explicit vendor self commands
+                const VENDOR_COMMAND_KEYWORDS = ['stats', 'sales', 'dashboard', 'analytics', 'products', 'catalog', 'ai off', 'ai on', 'help', 'confirm test', 'test confirm'];
+                const isVendorCommand = VENDOR_COMMAND_KEYWORDS.some(cmd => lowerText === cmd || lowerText.startsWith('edit description ') || lowerText.startsWith('delete product '));
+
+                if (isVendorSelfChat && (isVendorCommand || isImage)) {
+                    if (vendorData) {
+                        const daysActive = (Date.now() - new Date(vendorData.createdAt).getTime()) / (1000 * 60 * 60 * 24);
+                        if (daysActive > 7 && !vendorData.isPro) {
+                            await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ *TRIAL EXPIRED:* Your 7-day Naxr AI trial has ended. Your bot is currently paused. Please subscribe to continue enjoying automated sales! 🚀` });
+                            continue;
                         }
-                        continue; 
                     }
-                }
 
-                // ─── VENDOR SELF-CHAT ADMIN CONTROLS ───
-                if (isVendorSelfChat) {
-                    // AI ON / OFF
+                    // ─── VENDOR SELF-CHAT ADMIN CONTROLS ───
                     if (lowerText === 'ai off') {
-                        await Vendor.findOneAndUpdate({ phoneNumber: cleanPhone }, { aiActive: false });
-                        await vendorSock.sendMessage(remoteJid, { text: `🛑 *AI Agent is now OFF.*\n\nCustomers will no longer receive automated replies until you turn it back on.` });
+                        await Vendor.findOneAndUpdate({ phoneNumber: cleanVendorPhone }, { aiActive: false });
+                        await safeSendMessage(vendorSock, remoteJid, { text: `🛑 *AI Agent is now OFF.*\n\nCustomers will no longer receive automated replies until you turn it back on.` });
                         continue;
                     }
                     if (lowerText === 'ai on') {
-                        await Vendor.findOneAndUpdate({ phoneNumber: cleanPhone }, { aiActive: true });
-                        await vendorSock.sendMessage(remoteJid, { text: `✅ *AI Agent is now ON.*\n\nYour store is live and ready to take orders!` });
+                        await Vendor.findOneAndUpdate({ phoneNumber: cleanVendorPhone }, { aiActive: true });
+                        await safeSendMessage(vendorSock, remoteJid, { text: `✅ *AI Agent is now ON.*\n\nYour store is live and ready to take orders!` });
                         continue;
                     }
 
                     // STATS
                     if (lowerText === 'stats' || lowerText === 'sales' || lowerText === 'dashboard') {
-                        const salesCount = await Order.countDocuments({ vendorPhone: cleanPhone, status: 'PAID' });
-                        const pendingCount = await Order.countDocuments({ vendorPhone: cleanPhone, status: 'PENDING' });
-                        const productsCount = await Product.countDocuments({ vendorPhone: cleanPhone });
+                        const salesCount = await Order.countDocuments({ vendorPhone: cleanVendorPhone, status: 'PAID' });
+                        const pendingCount = await Order.countDocuments({ vendorPhone: cleanVendorPhone, status: 'PENDING' });
+                        const productsCount = await Product.countDocuments({ vendorPhone: cleanVendorPhone });
                         const totalRevenue = await Order.aggregate([
-                            { $match: { vendorPhone: cleanPhone, status: 'PAID' } },
+                            { $match: { vendorPhone: cleanVendorPhone, status: 'PAID' } },
                             { $group: { _id: null, total: { $sum: '$amount' } } }
                         ]);
                         const revenue = totalRevenue[0]?.total || 0;
@@ -402,7 +456,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         let trialText = vendorData?.isPro ? "✅ Pro Plan Active" : `⏳ Free Trial: ${Math.max(7 - Math.floor((Date.now() - new Date(vendorData.createdAt).getTime()) / (1000 * 60 * 60 * 24)), 0)} days left`;
                         let aiStatus = vendorData?.aiActive !== false ? "🟢 AI ON" : "🔴 AI OFF";
                         
-                        await vendorSock.sendMessage(remoteJid, { 
+                        await safeSendMessage(vendorSock, remoteJid, { 
                             text: `📊 *${storeName} Admin Dashboard*\n\n` +
                                   `🛍️ Active Products: ${productsCount}\n` +
                                   `✅ Confirmed Paid Sales: ${salesCount}\n` +
@@ -415,10 +469,10 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 
                     // ANALYTICS (enhanced stats)
                     if (lowerText === 'analytics') {
-                        const paidOrders = await Order.find({ vendorPhone: cleanPhone, status: 'PAID' }).sort({ createdAt: -1 }).limit(5);
-                        const pendingOrders = await Order.find({ vendorPhone: cleanPhone, status: 'PENDING' }).sort({ createdAt: -1 }).limit(5);
+                        const paidOrders = await Order.find({ vendorPhone: cleanVendorPhone, status: 'PAID' }).sort({ createdAt: -1 }).limit(5);
+                        const pendingOrders = await Order.find({ vendorPhone: cleanVendorPhone, status: 'PENDING' }).sort({ createdAt: -1 }).limit(5);
                         const totalRevenue = await Order.aggregate([
-                            { $match: { vendorPhone: cleanPhone, status: 'PAID' } },
+                            { $match: { vendorPhone: cleanVendorPhone, status: 'PAID' } },
                             { $group: { _id: null, total: { $sum: '$amount' } } }
                         ]);
                         const revenue = totalRevenue[0]?.total || 0;
@@ -428,10 +482,10 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                             : "No paid orders yet.";
                             
                         const recentPending = pendingOrders.length > 0
-                            ? pendingOrders.map(o => `• ${o.productName} — ₦${o.amount.toLocaleString()} (Acct: ${o.virtualAccountNumber})`).join('\n')
+                            ? pendingOrders.map(o => `• ${o.productName} — ₦${o.amount.toLocaleString()} (Ref: ${o.virtualAccountNumber})`).join('\n')
                             : "No pending orders.";
 
-                        await vendorSock.sendMessage(remoteJid, {
+                        await safeSendMessage(vendorSock, remoteJid, {
                             text: `📈 *Analytics for ${storeName}*\n\n` +
                                   `*Revenue:* ₦${revenue.toLocaleString()}\n\n` +
                                   `*Recent Paid Orders:*\n${recentPaid}\n\n` +
@@ -443,46 +497,61 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 
                     // PRODUCTS
                     if (lowerText === 'products' || lowerText === 'catalog') {
-                        const activeProducts = await Product.find({ vendorPhone: cleanPhone });
-                        const catalogText = activeProducts.length > 0 
-                            ? activeProducts.map(p => `• ${p.name} - ₦${p.price.toLocaleString()}`).join("\n")
-                            : "No products added yet.";
-                        await vendorSock.sendMessage(remoteJid, { text: `📦 *Product Catalog for ${storeName}:*\n\n${catalogText}` });
+                        const activeProducts = await Product.find({ vendorPhone: cleanVendorPhone });
+                        if (activeProducts.length > 0) {
+                            await safeSendMessage(vendorSock, remoteJid, { text: `📦 *Product Catalog for ${storeName}:*` });
+                            for (const p of activeProducts) {
+                                if (p.imageUrl) {
+                                    try {
+                                        await safeSendMessage(vendorSock, remoteJid, { 
+                                            image: { url: p.imageUrl }, 
+                                            caption: `🛍️ *${p.name}*\n💰 Price: ₦${p.price.toLocaleString()}` 
+                                        });
+                                    } catch (e) {
+                                        await safeSendMessage(vendorSock, remoteJid, { text: `🛍️ *${p.name}*\n💰 Price: ₦${p.price.toLocaleString()}` });
+                                    }
+                                } else {
+                                    await safeSendMessage(vendorSock, remoteJid, { text: `🛍️ *${p.name}*\n💰 Price: ₦${p.price.toLocaleString()}` });
+                                }
+                            }
+                        } else {
+                            await safeSendMessage(vendorSock, remoteJid, { text: `📦 No products added yet.` });
+                        }
                         continue;
                     } 
 
                     // EDIT DESCRIPTION
                     if (lowerText.startsWith('edit description ')) {
                         const newDesc = textMessage.substring(17).trim();
-                        await Vendor.updateOne({ phoneNumber: cleanPhone }, { description: newDesc });
-                        await vendorSock.sendMessage(remoteJid, { text: `✅ Business description updated.` });
+                        await Vendor.updateOne({ phoneNumber: cleanVendorPhone }, { description: newDesc });
+                        await safeSendMessage(vendorSock, remoteJid, { text: `✅ Business description updated.` });
                         continue;
                     }
 
                     // DELETE PRODUCT
                     if (lowerText.startsWith('delete product ')) {
                         const prodName = textMessage.substring(15).trim();
-                        const res = await Product.deleteOne({ vendorPhone: cleanPhone, name: { $regex: new RegExp(prodName, 'i') } });
-                        if (res.deletedCount > 0) await vendorSock.sendMessage(remoteJid, { text: `✅ Product "${prodName}" deleted.` });
-                        else await vendorSock.sendMessage(remoteJid, { text: `⚠️ Product not found.` });
+                        const res = await Product.deleteOne({ vendorPhone: cleanVendorPhone, name: { $regex: new RegExp(prodName, 'i') } });
+                        if (res.deletedCount > 0) await safeSendMessage(vendorSock, remoteJid, { text: `✅ Product "${prodName}" deleted.` });
+                        else await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ Product not found.` });
                         continue;
                     }
 
-                    // CONFIRM TEST PAYMENT (manual test mode)
+                    // CONFIRM TEST PAYMENT
                     if (lowerText === 'confirm test' || lowerText === 'test confirm') {
-                        const pendingOrder = await Order.findOne({ vendorPhone: cleanPhone, status: 'PENDING' }).sort({ createdAt: -1 });
+                        const pendingOrder = await Order.findOne({ vendorPhone: cleanVendorPhone, status: 'PENDING' }).sort({ createdAt: -1 });
                         if (!pendingOrder) {
-                            await vendorSock.sendMessage(remoteJid, { text: `⚠️ No pending test orders found.` });
+                            await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ No pending orders found.` });
                             continue;
                         }
                         pendingOrder.status = 'PAID';
                         await pendingOrder.save();
                         
-                        await vendorSock.sendMessage(`${pendingOrder.customerPhone}@s.whatsapp.net`, { 
-                            text: `✅ *TEST PAYMENT CONFIRMED!*\n\nYour order for *${pendingOrder.productName}* has been manually confirmed. 🎉` 
+                        await safeSendMessage(vendorSock, `${pendingOrder.customerPhone}@s.whatsapp.net`, { 
+                            text: `✅ *PAYMENT CONFIRMED!*\n\nYour order for *${pendingOrder.productName}* has been confirmed. 🎉` 
                         });
-                        await vendorSock.sendMessage(remoteJid, { 
-                            text: `✅ *Test order confirmed!*\n\nItem: ${pendingOrder.productName}\nAmount: ₦${pendingOrder.amount.toLocaleString()}\nCustomer: +${pendingOrder.customerPhone}` 
+                        await safeSendMessage(vendorSock, remoteJid, { 
+                            text: `✅ *Order confirmed!*\n\nItem: ${pendingOrder.productName}\nAmount: ₦${pendingOrder.amount.toLocaleString()}\nCustomer: +${pendingOrder.customerPhone}` 
                         });
                         continue;
                     }
@@ -493,20 +562,20 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         if (match) {
                             const price = parseInt(match[0]);
                             const name = textMessage.replace(match[0], '').replace(/[#₦$-]/g, '').trim() || "Unnamed Item";
-                            await vendorSock.sendMessage(remoteJid, { react: { text: "⏳", key: msg.key } });
+                            await safeSendMessage(vendorSock, remoteJid, { react: { text: "⏳", key: msg.key } });
                             const buffer = await downloadMediaMessage(msg, 'buffer', {});
                             const imageUrl = await uploadToCloudinary(buffer);
-                            await Product.create({ vendorPhone: cleanPhone, name, price, imageUrl });
-                            await vendorSock.sendMessage(remoteJid, { text: `✅ *New Product Added!*\n\n${name} - ₦${price.toLocaleString()}` });
+                            await Product.create({ vendorPhone: cleanVendorPhone, name, price, imageUrl });
+                            await safeSendMessage(vendorSock, remoteJid, { text: `✅ *New Product Added!*\n\n${name} - ₦${price.toLocaleString()}` });
                         } else {
-                            await vendorSock.sendMessage(remoteJid, { text: `⚠️ Include product name and price in caption.` });
+                            await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ Include product name and price in caption.` });
                         }
                         continue;
                     }
 
                     // HELP
                     if (lowerText === 'help') {
-                        await vendorSock.sendMessage(remoteJid, { 
+                        await safeSendMessage(vendorSock, remoteJid, { 
                             text: `💡 *Naxr Vendor Commands:*\n` +
                                   `• *stats* — Quick sales summary\n` +
                                   `• *analytics* — Detailed breakdown\n` +
@@ -514,13 +583,13 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                                   `• *ai on* / *ai off* — Toggle AI\n` +
                                   `• *edit description [text]*\n` +
                                   `• *delete product [name]*\n` +
-                                  `• *confirm test* — Confirm test payment\n` +
+                                  `• *confirm test* — Confirm pending order\n` +
                                   `• Send image + price to add product` 
                         });
                         continue;
                     }
 
-                    // Unrecognized self-chat message
+                    // If vendor self-chat message matched command/image, we continue
                     continue; 
                 }
 
@@ -528,32 +597,60 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                 if (msg.key.fromMe) continue;
                 if (!vendorData || vendorData.aiActive === false) continue;
 
-                const activeProducts = await Product.find({ vendorPhone: cleanPhone });
+                const activeProducts = await Product.find({ vendorPhone: cleanVendorPhone });
+
+                // Check paid command from customer
+                if (['paid', 'i have paid', 'i paid', 'payment sent', 'done paying'].includes(lowerText)) {
+                    const pendingOrder = await Order.findOne({ vendorPhone: cleanVendorPhone, customerPhone: cleanRemoteJidNumber, status: 'PENDING' }).sort({ createdAt: -1 });
+                    if (pendingOrder) {
+                        await safeSendMessage(vendorSock, remoteJid, { text: `👍 *Payment notification sent to seller!* We will verify your payment shortly. Thank you! ✨` });
+                        await safeSendMessage(vendorSock, `${cleanVendorPhone}@s.whatsapp.net`, { 
+                            text: `📩 *CUSTOMER REPORTED PAYMENT!*\n\nCustomer +${cleanRemoteJidNumber} reported payment for *${pendingOrder.productName}* (₦${pendingOrder.amount.toLocaleString()}).\nReply *"confirm test"* to confirm payment.` 
+                        });
+                    } else {
+                        await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ No pending orders found for your number.` });
+                    }
+                    continue;
+                }
+
                 let hasBuyingIntent = BUYING_INTENT_TRIGGERS.some(trigger => lowerText.includes(trigger));
                 
                 if (!hasBuyingIntent && activeProducts.length > 0) {
                     hasBuyingIntent = activeProducts.some(p => {
                         const cleanName = p.name.replace(/[^\w\s]/gi, '').toLowerCase().trim();
-                        return cleanName.length > 3 && lowerText.includes(cleanName);
+                        return cleanName.length >= 3 && lowerText.includes(cleanName);
                     });
                 }
 
                 if (!hasBuyingIntent) continue;
 
-                const isCatalogRequest = ['catalog', 'catalogue', 'products', 'product list', 'what do you sell', 'show me'].some(t => lowerText.includes(t));
+                const isCatalogRequest = CATALOG_TRIGGERS.some(t => lowerText.includes(t));
                 
                 if (isCatalogRequest) {
                     if (activeProducts.length > 0) {
-                        await vendorSock.sendMessage(remoteJid, { text: `📦 *Here is our current catalog:*` });
+                        await safeSendMessage(vendorSock, remoteJid, { text: `📦 *Here is our current catalog for ${storeName}:*` });
                         for (const p of activeProducts) {
                             if (p.imageUrl) {
-                                await vendorSock.sendMessage(remoteJid, { image: { url: p.imageUrl }, caption: `*${p.name}*\n💰 Price: ₦${p.price.toLocaleString()}` });
+                                try {
+                                    await safeSendMessage(vendorSock, remoteJid, { 
+                                        image: { url: p.imageUrl }, 
+                                        caption: `🛍️ *${p.name}*\n💰 *Price:* ₦${p.price.toLocaleString()}\n\n👉 Reply *"I want to buy ${p.name}"* to place an order!` 
+                                    });
+                                } catch (e) {
+                                    await safeSendMessage(vendorSock, remoteJid, { 
+                                        text: `🛍️ *${p.name}*\n💰 *Price:* ₦${p.price.toLocaleString()}\n\n👉 Reply *"I want to buy ${p.name}"* to place an order!` 
+                                    });
+                                }
+                            } else {
+                                await safeSendMessage(vendorSock, remoteJid, { 
+                                    text: `🛍️ *${p.name}*\n💰 *Price:* ₦${p.price.toLocaleString()}\n\n👉 Reply *"I want to buy ${p.name}"* to place an order!` 
+                                });
                             }
                         }
                         await delay(1000);
-                        await vendorSock.sendMessage(remoteJid, { text: `Reply with the name of the item you'd like to buy! ✨` });
+                        await safeSendMessage(vendorSock, remoteJid, { text: `✨ Reply with the name of any item you'd like to buy!` });
                     } else {
-                        await vendorSock.sendMessage(remoteJid, { text: `📦 We are currently updating our catalog.` });
+                        await safeSendMessage(vendorSock, remoteJid, { text: `📦 We are currently updating our catalog.` });
                     }
                     continue; 
                 }
@@ -563,7 +660,10 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                 const customerAI = await openai.chat.completions.create({
                     model: "gpt-4o-mini",
                     messages: [
-                        { role: "system", content: `You are Naxr, sales rep for ${storeName}. Catalog:\n${catalog}\nIf customer explicitly wants to buy a specific item or mentions a product name, output JSON ONLY: {"action": "BUY", "productName": "Name", "price": 10000}. Otherwise reply naturally with friendly emojis.` },
+                        { 
+                            role: "system", 
+                            content: `You are Naxr, sales rep for ${storeName}. Catalog:\n${catalog}\nIf customer explicitly wants to buy a specific item or mentions a product name to buy, output JSON ONLY: {"action": "BUY", "productName": "Name", "price": 10000}. Otherwise reply naturally with friendly emojis.` 
+                        },
                         { role: "user", content: textMessage }
                     ]
                 });
@@ -574,38 +674,83 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     try {
                         const data = JSON.parse(reply);
                         
-                        await vendorSock.sendMessage(remoteJid, { text: `⏳ Generating secure Virtual Account via Paystack...` });
+                        await safeSendMessage(vendorSock, remoteJid, { text: `⏳ Generating secure payment details via Paystack...` });
 
-                        const virtualAcc = await createVirtualAccount(cleanRemoteJidNumber, vendorData.subaccountCode);
-                        
-                        await Order.create({
-                            vendorPhone: cleanPhone,
-                            customerPhone: cleanRemoteJidNumber,
-                            productName: data.productName,
-                            amount: data.price,
-                            virtualAccountNumber: virtualAcc.accountNumber,
-                            status: 'PENDING'
-                        });
-                        
-                        const testWarning = virtualAcc.isTestMode 
-                            ? `\n\n⚠️ *TEST MODE ACTIVE:* This is a test virtual account. Payments will NOT auto-confirm via webhook.\n_Vendor can manually confirm with "confirm test" in their admin chat._`
-                            : '';
+                        let virtualAcc = null;
+                        let isFallback = false;
 
-                        await vendorSock.sendMessage(remoteJid, { 
-                            text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
-                                  `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
-                                  `🏦 *Pay With Transfer:*\n` +
-                                  `Bank: *${virtualAcc.bankName}*\n` +
-                                  `Account No: *${virtualAcc.accountNumber}*\n` +
-                                  `Name: *${virtualAcc.accountName}*\n\n` +
-                                  `_This virtual account is strictly for this transaction. Our AI system will automatically confirm your order once the transfer is received!_ ✨` +
-                                  testWarning
-                        });
+                        try {
+                            virtualAcc = await createVirtualAccount(cleanRemoteJidNumber, vendorData.subaccountCode);
+                        } catch (e) {
+                            console.log("ℹ️ Paystack Virtual Account generation failed/unavailable. Using Vendor Direct Account fallback.");
+                            isFallback = true;
+                        }
+                        
+                        const orderRefNumber = `NX-${Date.now().toString().slice(-6)}`;
+
+                        if (virtualAcc && !isFallback) {
+                            await Order.create({
+                                vendorPhone: cleanVendorPhone,
+                                customerPhone: cleanRemoteJidNumber,
+                                productName: data.productName,
+                                amount: data.price,
+                                virtualAccountNumber: virtualAcc.accountNumber,
+                                status: 'PENDING'
+                            });
+                            
+                            const testWarning = virtualAcc.isTestMode 
+                                ? `\n\n⚠️ *TEST MODE ACTIVE:* This is a test virtual account.`
+                                : '';
+
+                            await safeSendMessage(vendorSock, remoteJid, { 
+                                text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
+                                      `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
+                                      `🏦 *Pay With Transfer:*\n` +
+                                      `Bank: *${virtualAcc.bankName}*\n` +
+                                      `Account No: *${virtualAcc.accountNumber}*\n` +
+                                      `Name: *${virtualAcc.accountName}*\n\n` +
+                                      `_This virtual account is strictly for this transaction. Our AI system will automatically confirm your order once the transfer is received!_ ✨` +
+                                      testWarning
+                            });
+                        } else {
+                            const vendorBank = vendorData.bankDetails || "Vendor Direct Account";
+                            await Order.create({
+                                vendorPhone: cleanVendorPhone,
+                                customerPhone: cleanRemoteJidNumber,
+                                productName: data.productName,
+                                amount: data.price,
+                                virtualAccountNumber: orderRefNumber,
+                                status: 'PENDING'
+                            });
+
+                            await safeSendMessage(vendorSock, remoteJid, {
+                                text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
+                                      `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
+                                      `🏦 *Payment Account Details:*\n` +
+                                      `Bank & Account: *${vendorBank}*\n` +
+                                      `Order Ref: *${orderRefNumber}*\n\n` +
+                                      `👉 Please make payment to the account above and reply with *PAID* once done! The seller will confirm your order. ✨`
+                            });
+                        }
                     } catch (e) {
-                        await vendorSock.sendMessage(remoteJid, { text: "⚠️ Could not generate a payment account at this time." });
+                        await safeSendMessage(vendorSock, remoteJid, { text: "⚠️ Could not generate a payment account at this time." });
                     }
                 } else {
-                    await vendorSock.sendMessage(remoteJid, { text: reply });
+                    await safeSendMessage(vendorSock, remoteJid, { text: reply });
+
+                    const matchedProduct = activeProducts.find(p => {
+                        const cleanName = p.name.replace(/[^\w\s]/gi, '').toLowerCase().trim();
+                        return cleanName.length >= 3 && lowerText.includes(cleanName);
+                    });
+
+                    if (matchedProduct && matchedProduct.imageUrl) {
+                        try {
+                            await safeSendMessage(vendorSock, remoteJid, {
+                                image: { url: matchedProduct.imageUrl },
+                                caption: `🛍️ *${matchedProduct.name}*\n💰 *Price:* ₦${matchedProduct.price.toLocaleString()}`
+                            });
+                        } catch (e) {}
+                    }
                 }
             } catch (error) {
                 console.error(`❌ Message Processing Error for ${msg?.key?.remoteJid}:`, error);
@@ -661,7 +806,8 @@ async function startNaxrMasterAgent(isReconnect = false) {
 
         for (const msg of m.messages) {
             try {
-                if (!msg.message || msg.key.fromMe) continue;
+                if (!msg.message) continue;
+                if (msg.key.id && botMessageIds.has(msg.key.id)) continue;
 
                 const remoteJid = msg.key.remoteJid;
                 if (!remoteJid || remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter')) continue;
@@ -669,22 +815,25 @@ async function startNaxrMasterAgent(isReconnect = false) {
                 const isImage = !!(msg.message.imageMessage || msg.message.ephemeralMessage?.message?.imageMessage);
                 let textMessage = extractMessageText(msg);
 
-                const lowerText = textMessage ? textMessage.toLowerCase() : "";
+                const lowerText = textMessage ? textMessage.toLowerCase().trim() : "";
                 const cleanText = lowerText.replace(/[^\w\s]/gi, '').trim();
                 const cleanRemoteJidNumber = cleanPhoneNumber(remoteJid);
+                const cleanAdminPhone = cleanPhoneNumber(ADMIN_PHONE);
 
-                if (cleanRemoteJidNumber === cleanPhoneNumber(ADMIN_PHONE)) {
-                    if (lowerText === 'admin stats') {
+                const isAdminMessage = cleanRemoteJidNumber === cleanAdminPhone || remoteJid.includes(cleanAdminPhone) || msg.key.fromMe;
+
+                if (isAdminMessage) {
+                    if (lowerText === 'admin stats' || lowerText === 'stats') {
                         const totalVendors = await Vendor.countDocuments({});
                         const totalOrders = await Order.countDocuments({ status: 'PAID' });
                         const totalProducts = await Product.countDocuments({});
-                        await sock.sendMessage(remoteJid, { text: `👑 *Naxr Super Admin*\n\n👥 Total Vendors: ${totalVendors}\n🛍️ Total Products Listed: ${totalProducts}\n✅ Total Paid Orders: ${totalOrders}` });
+                        await safeSendMessage(sock, remoteJid, { text: `👑 *Naxr Super Admin*\n\n👥 Total Vendors: ${totalVendors}\n🛍️ Total Products Listed: ${totalProducts}\n✅ Total Paid Orders: ${totalOrders}` });
                         continue;
                     }
-                    if (lowerText === 'admin vendors') {
+                    if (lowerText === 'admin vendors' || lowerText === 'vendors') {
                         const vendors = await Vendor.find({});
                         const vList = vendors.map(v => `• ${v.storeName} (${v.phoneNumber})`).join("\n");
-                        await sock.sendMessage(remoteJid, { text: `👑 *Registered Vendors:*\n\n${vList || "No vendors yet."}` });
+                        await safeSendMessage(sock, remoteJid, { text: `👑 *Registered Vendors:*\n\n${vList || "No vendors yet."}` });
                         continue;
                     }
                     if (lowerText.startsWith('delete vendor ')) {
@@ -698,10 +847,12 @@ async function startNaxrMasterAgent(isReconnect = false) {
                             delete vendorSockets[targetPhone];
                         }
                         await Auth.deleteMany({ _id: { $regex: `^vendor_${targetPhone}` } });
-                        await sock.sendMessage(remoteJid, { text: `✅ Vendor ${targetPhone} completely purged from system.` });
+                        await safeSendMessage(sock, remoteJid, { text: `✅ Vendor ${targetPhone} completely purged from system.` });
                         continue;
                     }
                 }
+
+                if (msg.key.fromMe) continue;
 
                 if (cleanText === 'reset' || cleanText === 'restart') {
                     const existingVendorForReset = await Vendor.findOne({ jid: remoteJid });
