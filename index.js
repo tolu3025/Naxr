@@ -152,21 +152,24 @@ async function transcribeVoiceNote(msg) {
 async function createVendorSubaccount(storeName, bankNameRaw, accountNumber) {
     try {
         const apiKey = process.env.SQUAD_SECRET_KEY;
-        if (!apiKey) throw new Error("No API key");
+        if (!apiKey) return null;
 
         const isSandbox = apiKey.startsWith('sandbox_');
         const baseUrl = isSandbox ? 'https://sandbox-api-d.squadco.com' : 'https://api-d.squadco.com';
 
         const banksRes = await axios.get(`${baseUrl}/transaction/ussd/banklist`, {
-            headers: { Authorization: `Bearer ${apiKey}` }
+            headers: { Authorization: `Bearer ${apiKey}` },
+            timeout: 10000 // 10 second timeout to avoid hanging on free Render tier
         });
-        const banks = banksRes.data.data;
-        const bank = banks.find(b => b.bank_name.toLowerCase().includes(bankNameRaw.toLowerCase().trim())) || banks[0];
+        const banks = banksRes.data?.data;
+        if (!banks || !Array.isArray(banks)) return null;
 
-        return bank.bank_code;
+        const bank = banks.find(b => b.bank_name.toLowerCase().includes(bankNameRaw.toLowerCase().trim())) || banks[0];
+        return bank ? bank.bank_code : null;
     } catch (error) {
-        console.error("⚠️ Squad Bank Code Error:", error?.response?.data || error.message);
-        throw new Error("Failed to retrieve bank code. Please verify your live Squad keys and bank details.");
+        // Log the error but return null so registration is not blocked
+        console.error("⚠️ Squad Bank Code Error (non-fatal):", error?.response?.data || error.message);
+        return null;
     }
 }
 
@@ -968,11 +971,12 @@ async function startNaxrMasterAgent(isReconnect = false) {
                     const accNo = parts[1].replace(/[^0-9]/g, '');
                     if (accNo.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Account number must be 10 digits.\n\n` + getStepPrompt(5) }); continue; }
 
-                    await sock.sendMessage(remoteJid, { text: `⏳ Setting up auto-withdrawals with Squad...` });
+                    await sock.sendMessage(remoteJid, { text: `⏳ Saving your bank details...` });
+                    // Attempt Squad bank code lookup — non-fatal if Squad is unreachable
                     const subaccountCode = await createVendorSubaccount(session.storeName, bankName, accNo);
 
                     session.bankDetails = `${bankName} - ${accNo}`;
-                    session.subaccountCode = subaccountCode;
+                    session.subaccountCode = subaccountCode || null; // safe even if Squad timed out
                     session.step = 6; await session.save(); await sock.sendMessage(remoteJid, { text: `Bank details saved! 🔒\n\n` + getStepPrompt(6) }); continue; 
                 }
                 
