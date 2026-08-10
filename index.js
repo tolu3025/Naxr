@@ -18,6 +18,7 @@ const cloudinary = require('cloudinary').v2;
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { Webhook } = require('svix');
 
 // ----------------------------------------------------
 // 1. CONFIGURATION & MONGO DB
@@ -30,11 +31,6 @@ cloudinary.config({
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const app = express();
-app.use(express.json());
-
-mongoose.connect(process.env.MONGODB_URI)
-    .then(() => console.log("📦 Connected to MongoDB Atlas Cloud!"))
-    .catch(err => console.error("❌ MongoDB Error:", err.message));
 
 // Schemas
 const Vendor = mongoose.model('Vendor', new mongoose.Schema({
@@ -66,6 +62,7 @@ const Order = mongoose.model('Order', new mongoose.Schema({
     productName: String,
     amount: Number,
     virtualAccountNumber: { type: String, unique: true }, 
+    txRef: String,
     status: { type: String, enum: ['PENDING', 'PAID'], default: 'PENDING' },
     createdAt: { type: Date, default: Date.now }
 }));
@@ -147,56 +144,64 @@ async function transcribeVoiceNote(msg) {
 }
 
 // ----------------------------------------------------
-// 2. PAYSTACK VIRTUAL ACCOUNT ENGINE (LIVE MODE)
+// 2. FLUTTERWAVE VIRTUAL ACCOUNT & BANK LOOKUP ENGINE
 // ----------------------------------------------------
-async function createVendorSubaccount(storeName, bankNameRaw, accountNumber) {
+async function lookupBankCode(bankNameRaw) {
     try {
-        if (!process.env.PAYSTACK_SECRET_KEY) throw new Error("No API key");
+        const apiKey = process.env.FLUTTERWAVE_SECRET_KEY;
+        if (!apiKey) return null;
 
-        const banksRes = await axios.get('https://api.paystack.co/bank', { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }});
-        const banks = banksRes.data.data;
+        const banksRes = await axios.get('https://api.flutterwave.com/v3/banks/NG', {
+            headers: { Authorization: `Bearer ${apiKey}` },
+            timeout: 10000
+        });
+
+        const banks = banksRes.data?.data;
+        if (!banks || !Array.isArray(banks)) return null;
+
         const bank = banks.find(b => b.name.toLowerCase().includes(bankNameRaw.toLowerCase().trim())) || banks[0];
-
-        const subRes = await axios.post('https://api.paystack.co/subaccount', {
-            business_name: storeName,
-            settlement_bank: bank.code,
-            account_number: accountNumber,
-            percentage_charge: 2.0 
-        }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }});
-
-        return subRes.data.data.subaccount_code;
+        return bank ? bank.code : null;
     } catch (error) {
-        console.error("⚠️ Paystack Subaccount Error:", error?.response?.data || error.message);
-        throw new Error("Failed to create vendor subaccount. Please verify your live Paystack keys and bank details.");
+        console.error("⚠️ Flutterwave Bank Code Error (non-fatal):", error?.response?.data || error.message);
+        return null;
     }
 }
 
-async function createVirtualAccount(customerPhone, vendorSubaccount) {
+async function createVirtualAccount(customerPhone, amount, productName) {
     try {
-        if (!process.env.PAYSTACK_SECRET_KEY) throw new Error("No API key");
-        
-        const custRes = await axios.post('https://api.paystack.co/customer', {
+        const apiKey = process.env.FLUTTERWAVE_SECRET_KEY;
+        if (!apiKey) throw new Error("No Flutterwave API key");
+
+        const ref = `BOT-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+        const response = await axios.post('https://api.flutterwave.com/v3/virtual-account-numbers', {
             email: `buyer_${customerPhone}_${Date.now()}@naxr.com`,
-            first_name: "Naxr",
-            last_name: "Customer",
-            phone: customerPhone
-        }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }});
-        
-        const customerCode = custRes.data.data.customer_code;
+            amount: amount,
+            tx_ref: ref,
+            is_permanent: false,
+            narration: `Naxr - ${productName || 'Order'}`
+        }, {
+            headers: {
+                Authorization: `Bearer ${apiKey}`,
+                'Content-Type': 'application/json'
+            },
+            timeout: 15000
+        });
 
-        const dvaRes = await axios.post('https://api.paystack.co/dedicated_account', {
-            customer: customerCode
-        }, { headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` }});
-
-        return {
-            accountNumber: dvaRes.data.data.account_number,
-            bankName: dvaRes.data.data.bank.name,
-            accountName: dvaRes.data.data.account_name,
-            isTestMode: false
-        };
+        if (response.data && response.data.status === 'success') {
+            return {
+                accountNumber: response.data.data.account_number,
+                bankName: response.data.data.bank_name,
+                accountName: response.data.data.account_name || "Naxr Payment",
+                txRef: ref,
+                isTestMode: apiKey.startsWith('FLWTEST')
+            };
+        } else {
+            throw new Error(response.data.message || "Failed to generate virtual account");
+        }
     } catch (error) {
-        console.error("⚠️ Paystack Virtual Account Error:", error?.response?.data || error.message);
-        throw new Error("Failed to create virtual account. Please verify your live Paystack keys.");
+        console.error("⚠️ Flutterwave Virtual Account Error:", error?.response?.data || error.message);
+        throw new Error("Failed to create virtual account. Please verify your Flutterwave keys.");
     }
 }
 
@@ -261,7 +266,7 @@ function getStepPrompt(step, storeName = "") {
         case 2: return `Store Name saved: *${storeName}* ✅\n\n🏷️ *Step 2/8:* What category is your business? (e.g. Fashion, Gadgets, Food) 🛍️`;
         case 3: return "📖 *Step 3/8:* Give a short description of what your business does. 💡";
         case 4: return "📱 *Step 4/8:* Enter your **WhatsApp Phone Number** for linking your AI (e.g., 2348027986674). 📞";
-        case 5: return "💳 *Step 5/8:* Provide your Bank Name and Account Number separated by a dash (e.g. Opay - 8148698365). Paystack will use this to automatically wire your sales! 🏦";
+        case 5: return "💳 *Step 5/8:* Provide your Bank Name and Account Number separated by a dash (e.g. Opay - 8148698365). Flutterwave will use this to automatically wire your sales! 🏦";
         case 6: return "🚚 *Step 6/8:* How do you handle delivery? (e.g. Same day in Lagos, Nationwide via GIGM). 📦";
         case 7: return "📸 *Step 7/8:* Send product photos with prices in captions (e.g. Vintage Shirt - ₦12,000).\n\nWhen done uploading, reply with *DONE*. ✨\n\n_Tip: If you ever make a mistake, reply with *RESET* to start over._";
         default: return "";
@@ -349,7 +354,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     `📖 *QUICK OPERATIONAL GUIDE*\n` +
                     `────────────────────────────\n` +
                     `1️⃣ *Automated Catalog:* Customers can ask for your catalog, and the AI will auto-send your product pictures and prices.\n` +
-                    `2️⃣ *Virtual Accounts (Anti-Fraud):* Instead of links, Naxr generates a direct **Virtual Bank Account** for every transaction. Fake screenshots won't work anymore—the AI verifies payments instantly via Paystack and wires the money to you!\n\n` +
+                    `2️⃣ *Virtual Accounts (Anti-Fraud):* Instead of links, Naxr generates a direct **Virtual Bank Account** for every transaction. Fake screenshots won't work anymore—the AI verifies payments instantly via Flutterwave and wires the money to you!\n\n` +
                     `🛠️ *MANAGE YOUR STORE DIRECTLY HERE*\n` +
                     `Message yourself (this chat) with these commands:\n` +
                     `• *stats* - View your total sales.\n` +
@@ -403,7 +408,10 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                 const isAudio = !!(msg.message.audioMessage || msg.message.ephemeralMessage?.message?.audioMessage);
                 let textMessage = extractMessageText(msg);
 
-                if (isAudio) textMessage = await transcribeVoiceNote(msg);
+                if (isAudio) {
+                    textMessage = await transcribeVoiceNote(msg);
+                    if (!textMessage || textMessage.trim().length < 3) continue;
+                }
                 if (!textMessage && !isImage) continue;
 
                 const lowerText = textMessage ? textMessage.toLowerCase().trim() : "";
@@ -413,7 +421,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                 const isVendorSelfChat = cleanRemoteJidNumber === cleanVendorPhone || 
                                          remoteJid.includes(cleanVendorPhone) || 
                                          remoteJid.endsWith('@lid') || 
-                                         msg.key.fromMe;
+                                         (msg.key.fromMe && remoteJid === `${cleanVendorPhone}@s.whatsapp.net`);
 
                 const vendorData = await Vendor.findOne({ phoneNumber: cleanVendorPhone });
 
@@ -613,15 +621,22 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     continue;
                 }
 
-                let hasBuyingIntent = BUYING_INTENT_TRIGGERS.some(trigger => lowerText.includes(trigger));
-                
+                let hasBuyingIntent = BUYING_INTENT_TRIGGERS.some(trigger => {
+                    const escaped = trigger.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const regex = new RegExp(`(?:^|[\\s.,!?;:\\-])${escaped}(?:[\\s.,!?;:\\-]|$)`, 'i');
+                    return regex.test(lowerText);
+                });
+
                 if (!hasBuyingIntent && activeProducts.length > 0) {
                     hasBuyingIntent = activeProducts.some(p => {
                         const cleanName = p.name.replace(/[^\w\s]/gi, '').toLowerCase().trim();
-                        return cleanName.length >= 3 && lowerText.includes(cleanName);
+                        if (cleanName.length < 3) return false;
+                        const regex = new RegExp(`(?:^|[\\s.,!?;:\\-])${cleanName}(?:[\\s.,!?;:\\-]|$)`, 'i');
+                        return regex.test(lowerText);
                     });
                 }
 
+                if (isAudio && !hasBuyingIntent) continue;
                 if (!hasBuyingIntent) continue;
 
                 const isCatalogRequest = CATALOG_TRIGGERS.some(t => lowerText.includes(t));
@@ -674,15 +689,15 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     try {
                         const data = JSON.parse(reply);
                         
-                        await safeSendMessage(vendorSock, remoteJid, { text: `⏳ Generating secure payment details via Paystack...` });
+                        await safeSendMessage(vendorSock, remoteJid, { text: `⏳ Generating secure payment details via Flutterwave...` });
 
                         let virtualAcc = null;
                         let isFallback = false;
 
                         try {
-                            virtualAcc = await createVirtualAccount(cleanRemoteJidNumber, vendorData.subaccountCode);
+                            virtualAcc = await createVirtualAccount(cleanRemoteJidNumber, data.price, data.productName);
                         } catch (e) {
-                            console.log("ℹ️ Paystack Virtual Account generation failed/unavailable. Using Vendor Direct Account fallback.");
+                            console.log("ℹ️ Flutterwave Virtual Account generation failed. Using Vendor Direct Account fallback.");
                             isFallback = true;
                         }
                         
@@ -695,6 +710,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                                 productName: data.productName,
                                 amount: data.price,
                                 virtualAccountNumber: virtualAcc.accountNumber,
+                                txRef: virtualAcc.txRef,
                                 status: 'PENDING'
                             });
                             
@@ -963,11 +979,11 @@ async function startNaxrMasterAgent(isReconnect = false) {
                     const accNo = parts[1].replace(/[^0-9]/g, '');
                     if (accNo.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Account number must be 10 digits.\n\n` + getStepPrompt(5) }); continue; }
 
-                    await sock.sendMessage(remoteJid, { text: `⏳ Setting up auto-withdrawals with Paystack...` });
-                    const subaccountCode = await createVendorSubaccount(session.storeName, bankName, accNo);
+                    await sock.sendMessage(remoteJid, { text: `⏳ Saving your bank details...` });
+                    const bankCode = await lookupBankCode(bankName);
 
                     session.bankDetails = `${bankName} - ${accNo}`;
-                    session.subaccountCode = subaccountCode;
+                    session.subaccountCode = bankCode || null;
                     session.step = 6; await session.save(); await sock.sendMessage(remoteJid, { text: `Bank details saved! 🔒\n\n` + getStepPrompt(6) }); continue; 
                 }
                 
@@ -1066,47 +1082,57 @@ async function startNaxrMasterAgent(isReconnect = false) {
 }
 
 // ----------------------------------------------------
-// 6. PAYSTACK WEBHOOK (VERIFY TRANSACTIONS)
+// 6. FLUTTERWAVE WEBHOOK (via Svix)
 // ----------------------------------------------------
-app.post('/paystack-webhook', async (req, res) => {
+app.post('/webhook/flutterwave', express.raw({ type: 'application/json' }), async (req, res) => {
+    res.sendStatus(200);
+
     try {
-        const hash = crypto.createHmac('sha512', process.env.PAYSTACK_SECRET_KEY).update(JSON.stringify(req.body)).digest('hex');
-        if (hash !== req.headers['x-paystack-signature']) return res.status(400).send('Invalid signature');
-        
-        res.sendStatus(200); 
+        const svixSecret = process.env.SVIX_SECRET;
+        if (!svixSecret) {
+            console.error("❌ SVIX_SECRET not set");
+            return;
+        }
 
-        const event = req.body;
-        if (event.event === 'charge.success') {
-            const { amount, authorization } = event.data;
-            const paidAmount = amount / 100; 
-            
-            const order = await Order.findOne({ 
-                virtualAccountNumber: authorization.receiver_bank_account.account_number, 
-                status: 'PENDING' 
-            });
+        const wh = new Webhook(svixSecret);
+        const event = wh.verify(req.body, req.headers);
 
-            if (order && paidAmount >= order.amount) {
-                order.status = 'PAID';
-                await order.save();
+        const eventType = event.event || event['event.type'];
 
-                const vSock = vendorSockets[order.vendorPhone];
-                if (vSock) {
-                    await vSock.sendMessage(`${order.customerPhone}@s.whatsapp.net`, { 
-                        text: `✅ *PAYMENT CONFIRMED!*\n\nYour payment of ₦${paidAmount.toLocaleString()} has been received. Your order for *${order.productName}* is confirmed! 🎉` 
-                    });
-                    
-                    await vSock.sendMessage(`${order.vendorPhone}@s.whatsapp.net`, { 
-                        text: `💰 *NEW PAID ORDER! (Via Paystack)*\n\n` +
-                              `Item: ${order.productName}\nAmount: ₦${paidAmount.toLocaleString()}\nCustomer: +${order.customerPhone}\n\n` +
-                              `_Funds will settle to your bank automatically._` 
-                    });
-                }
+        if (eventType !== 'charge.completed') return;
+        if (event.data?.status !== 'successful') return;
+
+        const data = event.data;
+        const txRef = data.tx_ref;
+
+        if (!txRef?.startsWith('BOT-')) return;
+
+        const paidAmount = data.amount;
+
+        const order = await Order.findOne({ txRef: txRef, status: 'PENDING' });
+
+        if (order && paidAmount >= order.amount * 0.95) {
+            order.status = 'PAID';
+            await order.save();
+
+            const vSock = vendorSockets[order.vendorPhone];
+            if (vSock) {
+                await vSock.sendMessage(`${order.customerPhone}@s.whatsapp.net`, {
+                    text: `✅ *PAYMENT CONFIRMED!*\n\nYour payment of ₦${paidAmount.toLocaleString()} has been received. Your order for *${order.productName}* is confirmed! 🎉`
+                });
+
+                await vSock.sendMessage(`${order.vendorPhone}@s.whatsapp.net`, {
+                    text: `💰 *NEW PAID ORDER!*\n\nItem: ${order.productName}\nAmount: ₦${paidAmount.toLocaleString()}\nCustomer: +${order.customerPhone}`
+                });
             }
         }
     } catch (e) {
-        console.error("Webhook Error:", e);
+        console.error("Webhook Error:", e.message);
     }
 });
+
+// Global JSON parser must come AFTER raw webhook route
+app.use(express.json());
 
 // ----------------------------------------------------
 // 7. AUTO-BOOT ALL VENDORS
@@ -1127,6 +1153,56 @@ async function bootAllVendors() {
 app.get('/', (req, res) => res.send('Naxr AI Engine Active! 🚀'));
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🌐 Server active on port ${PORT}`));
+const server = app.listen(PORT, () => console.log(`🌐 Server active on port ${PORT}`));
+
+mongoose.connect(process.env.MONGODB_URI)
+    .then(() => console.log("📦 Connected to MongoDB Atlas Cloud!"))
+    .catch(err => console.error("❌ MongoDB Error:", err.message));
 
 startNaxrMasterAgent().then(() => bootAllVendors());
+
+// Graceful shutdown to prevent session conflicts during zero-downtime redeploys on Render
+async function gracefulShutdown(signal) {
+    console.log(`⚠️ Received ${signal}. Commencing graceful shutdown...`);
+    
+    server.close(() => {
+        console.log("🌐 HTTP server closed.");
+    });
+    
+    for (const phone in vendorSockets) {
+        if (vendorSockets[phone]) {
+            console.log(`🔌 Closing connection for vendor ${phone}...`);
+            try {
+                vendorSockets[phone].ev.removeAllListeners('connection.update');
+                vendorSockets[phone].ev.removeAllListeners('creds.update');
+                vendorSockets[phone].ev.removeAllListeners('messages.upsert');
+                vendorSockets[phone].end();
+            } catch (e) {
+                console.error(`Error closing socket for ${phone}:`, e.message);
+            }
+        }
+    }
+    
+    if (globalSock) {
+        console.log(`🔌 Closing connection for master agent...`);
+        try {
+            globalSock.ev.removeAllListeners('connection.update');
+            globalSock.ev.removeAllListeners('creds.update');
+            globalSock.ev.removeAllListeners('messages.upsert');
+            globalSock.end();
+        } catch (e) {
+            console.error(`Error closing master agent:`, e.message);
+        }
+    }
+    
+    try {
+        await mongoose.connection.close();
+        console.log("📦 MongoDB connection closed.");
+    } catch (e) {}
+    
+    console.log("👋 Shutdown complete. Exiting process.");
+    process.exit(0);
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
