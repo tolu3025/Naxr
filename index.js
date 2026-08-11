@@ -61,7 +61,7 @@ const Order = mongoose.model('Order', new mongoose.Schema({
     customerPhone: { type: String, required: true },
     productName: String,
     amount: Number,
-    virtualAccountNumber: { type: String, unique: true }, 
+    virtualAccountNumber: String, 
     txRef: String,
     status: { type: String, enum: ['PENDING', 'PAID'], default: 'PENDING' },
     createdAt: { type: Date, default: Date.now }
