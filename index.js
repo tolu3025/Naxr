@@ -425,13 +425,14 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     remoteJid.endsWith('@lid') ||
                     msg.key.fromMe;
 
-                const vendorData = await Vendor.findOne({ phoneNumber: cleanVendorPhone });
-
                 // Check for explicit vendor self commands
                 const VENDOR_COMMAND_KEYWORDS = ['stats', 'sales', 'dashboard', 'analytics', 'products', 'catalog', 'ai off', 'ai on', 'help', 'confirm test', 'test confirm'];
                 const isVendorCommand = VENDOR_COMMAND_KEYWORDS.some(cmd => lowerText === cmd || lowerText.startsWith('edit description ') || lowerText.startsWith('delete product '));
 
-                if (isVendorSelfChat && (isVendorCommand || isImage)) {
+                // Only handle in vendor self admin flow if it's a text command, OR an image intended as an admin action (contains pricing information in the caption to add product)
+                const isProductAddImage = isImage && textMessage && textMessage.match(/\d+/);
+                
+                if (isVendorSelfChat && (isVendorCommand || isProductAddImage)) {
                     if (vendorData) {
                         const daysActive = (Date.now() - new Date(vendorData.createdAt).getTime()) / (1000 * 60 * 60 * 24);
                         if (daysActive > 7 && !vendorData.isPro) {
