@@ -749,6 +749,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                             });
                         }
                     } catch (e) {
+                        console.error("❌ Checkout Processing Error:", e.message, e.stack);
                         await safeSendMessage(vendorSock, remoteJid, { text: "⚠️ Could not generate a payment account at this time." });
                     }
                 } else {
