@@ -234,9 +234,9 @@ async function safeSendMessage(sock, jid, content, options = {}) {
 
 const REG_TRIGGERS = [
     'i want to register', 'how do i register', 'register my business', 'know more about this ai', 
-    'hi can i know more', 'register', 'registration', 'sign up', 'signup', 'start', 'onboard', 
+    'hi can i know more', 'register', 'registration', 'sign up', 'signup', 'onboard', 
     'create store', 'create account', 'join naxr', 'setup bot', 'set up bot', 'link my whatsapp', 
-    'tell me about naxr', 'how does this work', 'how to use naxr', 'get started', 'begin', 'how to register'
+    'tell me about naxr', 'how does this work', 'how to use naxr', 'get started', 'how to register'
 ];
 
 const CATALOG_TRIGGERS = [
@@ -896,7 +896,11 @@ async function startNaxrMasterAgent(isReconnect = false) {
                 }
 
                 const existingVendor = await Vendor.findOne({ jid: remoteJid });
-                const isRegTrigger = REG_TRIGGERS.some(t => lowerText.includes(t));
+                const isRegTrigger = REG_TRIGGERS.some(t => {
+                    const escaped = t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const regex = new RegExp(`(?:^|[\\s.,!?;:\\-])${escaped}(?:[\\s.,!?;:\\-]|$)`, 'i');
+                    return regex.test(lowerText);
+                });
 
                 if (existingVendor) {
                     if (cleanText === 'link' || cleanText === 'code' || cleanText === 'relink' || cleanText === 'new code') {
