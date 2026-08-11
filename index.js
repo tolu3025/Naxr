@@ -38,6 +38,10 @@ const Vendor = mongoose.model('Vendor', new mongoose.Schema({
     jid: String,
     storeName: { type: String, required: true },
     category: String,
+    businessType: { type: String, enum: ['RETAIL', 'CUSTOM', 'SERVICE_TRANSPORT'], default: 'RETAIL' },
+    paymentPolicy: { type: String, enum: ['UPFRONT', 'PAY_ON_BOARD', 'FLEXIBLE'], default: 'UPFRONT' },
+    allowNegotiation: { type: Boolean, default: false },
+    maxDiscountPercent: { type: Number, default: 0 },
     description: String,
     bankDetails: String,
     subaccountCode: String,
@@ -53,6 +57,8 @@ const Product = mongoose.model('Product', new mongoose.Schema({
     vendorPhone: { type: String, required: true },
     name: { type: String, required: true },
     price: { type: Number, required: true },
+    minPrice: { type: Number, default: 0 },
+    isNegotiable: { type: Boolean, default: false },
     imageUrl: String
 }));
 
@@ -61,9 +67,10 @@ const Order = mongoose.model('Order', new mongoose.Schema({
     customerPhone: { type: String, required: true },
     productName: String,
     amount: Number,
+    paymentPolicy: { type: String, default: 'UPFRONT' },
     virtualAccountNumber: String,
     txRef: String,
-    status: { type: String, enum: ['PENDING', 'PAID'], default: 'PENDING' },
+    status: { type: String, enum: ['PENDING', 'PAID', 'BOOKED'], default: 'PENDING' },
     createdAt: { type: Date, default: Date.now }
 }));
 
@@ -72,6 +79,10 @@ const RegSession = mongoose.model('RegSession', new mongoose.Schema({
     step: { type: Number, default: 1 },
     storeName: String,
     category: String,
+    businessType: { type: String, default: 'RETAIL' },
+    paymentPolicy: { type: String, default: 'UPFRONT' },
+    allowNegotiation: { type: Boolean, default: false },
+    maxDiscountPercent: { type: Number, default: 0 },
     description: String,
     bankDetails: String,
     subaccountCode: String,
@@ -262,15 +273,49 @@ const BUYING_INTENT_TRIGGERS = [
     'can i see products', 'let me see', 'show catalog', 'show catalogue', 'stock'
 ];
 
-function getStepPrompt(step, storeName = "") {
+function getStepPrompt(step, session = {}) {
+    const storeName = session.storeName || "";
     switch (step) {
-        case 1: return "📝 *Step 1/8:* What is your Business / Store Name? ✨";
-        case 2: return `Store Name saved: *${storeName}* ✅\n\n🏷️ *Step 2/8:* What category is your business? (e.g. Fashion, Gadgets, Food) 🛍️`;
-        case 3: return "📖 *Step 3/8:* Give a short description of what your business does. 💡";
-        case 4: return "📱 *Step 4/8:* Enter your **WhatsApp Phone Number** for linking your AI (e.g., 2348027986674). 📞";
-        case 5: return "💳 *Step 5/8:* Provide your Bank Name and Account Number separated by a dash (e.g. Opay - 8148698365). Flutterwave will use this to automatically wire your sales! 🏦";
-        case 6: return "🚚 *Step 6/8:* How do you handle delivery? (e.g. Same day in Lagos, Nationwide via GIGM). 📦";
-        case 7: return "📸 *Step 7/8:* Send product photos with prices in captions (e.g. Vintage Shirt - ₦12,000).\n\nWhen done uploading, reply with *DONE*. ✨\n\n_Tip: If you ever make a mistake, reply with *RESET* to start over._";
+        case 1: 
+            return "📝 *Step 1/8:* What is your Business / Store Name? ✨";
+        case 2: 
+            return `Store Name saved: *${storeName}* ✅\n\n🏷️ *Step 2/8:* What category is your business?\n\n` +
+                   `Reply with one of the numbers below:\n` +
+                   `1️⃣ *Retail & Products* (Fashion, Electronics, Food, General Goods)\n` +
+                   `2️⃣ *Custom / Bespoke* (Custom Cakes, Tailoring, Handcrafted, Wholesale)\n` +
+                   `3️⃣ *Services & Transport* (Campus Shuttle, Taxi, Logistics, Barber, Consultations)`;
+        case 3: 
+            return "📖 *Step 3/8:* Give a short description of what your business does. 💡";
+        case 4:
+            if (session.businessType === 'CUSTOM') {
+                return "🤝 *Step 4/8:* Do you allow AI price negotiations with buyers?\n\n" +
+                       "Reply with *NO* for fixed prices, or reply with the **Max Discount %** allowed (e.g. *15%* to allow up to 15% discount).";
+            } else if (session.businessType === 'SERVICE_TRANSPORT') {
+                return "💳 *Step 4/8:* How should customers pay for your service/transport?\n\n" +
+                       "Reply with:\n" +
+                       "1️⃣ *PAY_ON_BOARD* (Students/clients pay cash/transfer upon boarding/service)\n" +
+                       "2️⃣ *UPFRONT* (Payment required before booking confirmation)\n" +
+                       "3️⃣ *FLEXIBLE* (Both allowed)";
+            } else {
+                return "📱 *Step 5/8:* Enter your **WhatsApp Phone Number** for linking your AI (e.g., 2348027986674). 📞";
+            }
+        case 5: 
+            return "📱 *Step 5/8:* Enter your **WhatsApp Phone Number** for linking your AI (e.g., 2348027986674). 📞";
+        case 6: 
+            return "💳 *Step 6/8:* Provide your Bank Name and Account Number (e.g. *Opay - 8148698365*).\n\n" +
+                   "_(Note: If your business doesn't collect online payments, reply *SKIP*)._ 🏦";
+        case 7: 
+            return "🚚 *Step 7/8:* How do you handle delivery/pickup? (e.g. *Same day in Campus*, *Pickup at Garage*, *Nationwide GIGM*). 📦";
+        case 8: 
+            if (session.businessType === 'SERVICE_TRANSPORT') {
+                return "🚕 *Step 8/8:* List your routes or services with prices!\n\n" +
+                       "Reply with text like:\n`Main Gate to Hostels - 200`\n`Campus Shuttle Daily Pass - 1000`\n\n" +
+                       "Reply *DONE* when finished listing! ✨";
+            } else {
+                return "📸 *Step 8/8:* Add your products or services!\n\n" +
+                       "You can send product photos with captions (e.g. `Vintage Shirt - 12000`), or text only.\n\n" +
+                       "When done, reply with *DONE*. ✨";
+            }
         default: return "";
     }
 }
@@ -701,6 +746,8 @@ Reply in JSON format only: {"isSubscriptionReceipt": true/false, "isSuspicious":
                             const buffer = await downloadMediaMessage(msg, 'buffer', {});
                             const base64Image = buffer.toString('base64');
 
+                            const todayDateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
                             const visionResponse = await openai.chat.completions.create({
                                 model: "gpt-4o-mini",
                                 messages: [
@@ -709,11 +756,11 @@ Reply in JSON format only: {"isSubscriptionReceipt": true/false, "isSuspicious":
                                         content: [
                                             { 
                                                 type: "text", 
-                                                text: `Analyze this image strictly for payment fraud. Look closely at the receipt details:
+                                                text: `Analyze this image strictly for payment fraud. Today's date is ${todayDateStr}. Look closely at the receipt details:
 1. Is this a valid transfer receipt/proof of payment?
 2. Does the amount shown on the receipt match ₦${pendingOrder.amount} exactly?
 3. Check for signs of digital manipulation (e.g. font mismatches, pixelation around numbers, weird spacing, alignment issues or known fake receipt generator templates).
-4. Is the date/timestamp matching or reasonable?
+4. Is the date/timestamp matching today (${todayDateStr}) or reasonable recent past? (Do not flag today's date as being in the future).
 
 Reply in JSON format only: {"isReceipt": true/false, "isSuspicious": true/false, "confidence": "high/medium/low", "reason": "Explain details of what you found."}` 
                                             },
@@ -826,14 +873,41 @@ Reply in JSON format only: {"isReceipt": true/false, "isSuspicious": true/false,
                     continue;
                 }
 
-                const catalog = activeProducts.map(p => `- ${p.name}: ₦${p.price}`).join("\n");
+                const todayDateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+                const catalog = activeProducts.map(p => {
+                    const minStr = (p.isNegotiable && p.minPrice > 0) ? ` (Listed: ₦${p.price}, Minimum allowed price: ₦${p.minPrice})` : ` (Price: ₦${p.price})`;
+                    return `- ${p.name}${minStr}`;
+                }).join("\n");
+
+                const businessType = vendorData.businessType || 'RETAIL';
+                const paymentPolicy = vendorData.paymentPolicy || 'UPFRONT';
+                const allowNegotiation = vendorData.allowNegotiation || false;
+
+                const negotiationInstructions = allowNegotiation
+                    ? `You are allowed to negotiate prices WITH BOUNDS. You must NEVER accept or output a price lower than the 'Minimum allowed price' specified for that item. If customer offers below the minimum, politely counter-offer with the minimum price.`
+                    : `Prices are FIXED. Do NOT offer or accept any discounts or reduced prices.`;
+
+                const policyInstructions = (paymentPolicy === 'PAY_ON_BOARD' || businessType === 'SERVICE_TRANSPORT')
+                    ? `This business operates on PAY ON BOARD / PAY AT SERVICE. Payment is NOT required upfront.`
+                    : `Payment is required UPFRONT to confirm order.`;
 
                 const customerAI = await openai.chat.completions.create({
                     model: "gpt-4o-mini",
                     messages: [
                         {
                             role: "system",
-                            content: `You are Naxr, sales rep for ${storeName}. Catalog:\n${catalog}\nIf customer explicitly wants to buy a specific item or mentions a product name to buy, output JSON ONLY: {"action": "BUY", "productName": "Name", "price": 10000}. Otherwise reply naturally with friendly emojis.`
+                            content: `You are Naxr, sales & booking rep for ${storeName} (${vendorData.category || 'Business'}). Today's date is ${todayDateStr}.
+Business Description: ${vendorData.description || 'N/A'}
+Delivery/Service Info: ${vendorData.deliveryInfo || 'N/A'}
+
+Catalog / Services:
+${catalog}
+
+Rules:
+1. ${negotiationInstructions}
+2. ${policyInstructions}
+3. If customer explicitly agrees/wants to buy, book, or reserve a specific item/service, output JSON ONLY: {"action": "BUY", "productName": "Exact Name", "price": agreed_number_price}.
+4. Otherwise reply naturally, helpfully, and concisely with friendly emojis.`
                         },
                         { role: "user", content: textMessage }
                     ]
@@ -847,24 +921,41 @@ Reply in JSON format only: {"isReceipt": true/false, "isSuspicious": true/false,
 
                         const orderRefNumber = `NX-${Date.now().toString().slice(-6)}`;
                         const vendorBank = vendorData.bankDetails || "Vendor Direct Account";
+                        const isPayOnBoard = (paymentPolicy === 'PAY_ON_BOARD' || businessType === 'SERVICE_TRANSPORT');
 
                         await Order.create({
                             vendorPhone: cleanVendorPhone,
                             customerPhone: cleanRemoteJidNumber,
                             productName: data.productName,
                             amount: data.price,
+                            paymentPolicy: paymentPolicy,
                             virtualAccountNumber: orderRefNumber,
-                            status: 'PENDING'
+                            status: isPayOnBoard ? 'BOOKED' : 'PENDING'
                         });
 
-                        await safeSendMessage(vendorSock, remoteJid, {
-                            text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
-                                `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
-                                `🏦 *Payment Account Details:*\n` +
-                                `Bank & Account: *${vendorBank}*\n` +
-                                `Order Ref: *${orderRefNumber}*\n\n` +
-                                `👉 Please make payment to the account above and reply by sending the *receipt screenshot* or writing *PAID*! ✨`
-                        });
+                        if (isPayOnBoard) {
+                            await safeSendMessage(vendorSock, remoteJid, {
+                                text: `🚌 *Booking Confirmed: ${data.productName}*\n\n` +
+                                    `💰 *Fare / Price:* ₦${data.price.toLocaleString()}\n` +
+                                    `Ref Code: *${orderRefNumber}*\n` +
+                                    `💳 *Payment Policy:* Pay cash/transfer upon boarding or service delivery. ✨\n\n` +
+                                    `Thank you for booking with *${storeName}*! See you soon! 🙌`
+                            });
+                            // Notify vendor
+                            await safeSendMessage(vendorSock, `${cleanVendorPhone}@s.whatsapp.net`, {
+                                text: `🔔 *NEW SERVICE BOOKING!*\n\nService/Route: ${data.productName}\nFare: ₦${data.price.toLocaleString()}\nCustomer: +${cleanRemoteJidNumber}\nPayment Mode: Pay on Boarding/Delivery`
+                            });
+                        } else {
+                            await safeSendMessage(vendorSock, remoteJid, {
+                                text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
+                                    `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
+                                    `🏦 *Payment Account Details:*\n` +
+                                    `Bank & Account: *${vendorBank}*\n` +
+                                    `Order Ref: *${orderRefNumber}*\n\n` +
+                                    `👉 Please make payment to the account above and reply by sending *PAID* or sharing your receipt! ✨\n` +
+                                    `*(Note: The vendor will verify your transfer and confirm your order).*`
+                            });
+                        }
                     } catch (e) {
                         console.error("❌ Checkout Processing Error:", e.message, e.stack);
                         await safeSendMessage(vendorSock, remoteJid, { text: "⚠️ Could not initiate order details at this time." });
@@ -1093,61 +1184,129 @@ async function startNaxrMasterAgent(isReconnect = false) {
                 }
 
                 if (session.step === 1) {
-                    if (textMessage.length < 2) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Name must be at least 2 characters.\n\n` + getStepPrompt(1) }); continue; }
-                    session.storeName = textMessage; session.step = 2; await session.save(); await sock.sendMessage(remoteJid, { text: getStepPrompt(2, session.storeName) }); continue;
+                    if (textMessage.length < 2) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Name must be at least 2 characters.\n\n` + getStepPrompt(1, session) }); continue; }
+                    session.storeName = textMessage; session.step = 2; await session.save(); await sock.sendMessage(remoteJid, { text: getStepPrompt(2, session) }); continue;
                 }
 
                 if (session.step === 2) {
-                    if (textMessage.length < 3) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Category too short.\n\n` + getStepPrompt(2, session.storeName) }); continue; }
-                    session.category = textMessage; session.step = 3; await session.save(); await sock.sendMessage(remoteJid, { text: `Category saved! 👍\n\n` + getStepPrompt(3) }); continue;
+                    if (cleanText === '1' || cleanText.includes('retail')) {
+                        session.businessType = 'RETAIL';
+                        session.category = 'Retail & Products';
+                    } else if (cleanText === '2' || cleanText.includes('custom')) {
+                        session.businessType = 'CUSTOM';
+                        session.category = 'Custom & Bespoke';
+                    } else if (cleanText === '3' || cleanText.includes('service') || cleanText.includes('transport')) {
+                        session.businessType = 'SERVICE_TRANSPORT';
+                        session.category = 'Services & Transport';
+                    } else {
+                        session.businessType = 'RETAIL';
+                        session.category = textMessage;
+                    }
+                    session.step = 3; await session.save(); await sock.sendMessage(remoteJid, { text: `Category set to *${session.category}*! 👍\n\n` + getStepPrompt(3, session) }); continue;
                 }
 
                 if (session.step === 3) {
-                    if (textMessage.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Description too short.\n\n` + getStepPrompt(3) }); continue; }
-                    session.description = textMessage; session.step = 4; await session.save(); await sock.sendMessage(remoteJid, { text: `Description saved! 🎯\n\n` + getStepPrompt(4) }); continue;
+                    if (textMessage.length < 5) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Description too short.\n\n` + getStepPrompt(3, session) }); continue; }
+                    session.description = textMessage; session.step = 4; await session.save(); await sock.sendMessage(remoteJid, { text: `Description saved! 🎯\n\n` + getStepPrompt(4, session) }); continue;
                 }
 
                 if (session.step === 4) {
-                    const clean = cleanPhoneNumber(textMessage);
-                    if (clean.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Invalid phone number format.` }); continue; }
-                    session.vendorRealPhone = clean; session.step = 5; await session.save(); await sock.sendMessage(remoteJid, { text: `Phone number *${clean}* saved! 📞\n\n` + getStepPrompt(5) }); continue;
+                    if (session.businessType === 'CUSTOM') {
+                        if (cleanText === 'no' || cleanText === '0' || cleanText === 'none') {
+                            session.allowNegotiation = false;
+                            session.maxDiscountPercent = 0;
+                        } else {
+                            const match = textMessage.match(/\d+/);
+                            const discount = match ? parseInt(match[0]) : 10;
+                            session.allowNegotiation = true;
+                            session.maxDiscountPercent = discount;
+                        }
+                        session.step = 5; await session.save(); await sock.sendMessage(remoteJid, { text: `Negotiation settings saved! 🤝\n\n` + getStepPrompt(5, session) }); continue;
+                    } else if (session.businessType === 'SERVICE_TRANSPORT') {
+                        if (cleanText.includes('board') || cleanText === '1') session.paymentPolicy = 'PAY_ON_BOARD';
+                        else if (cleanText.includes('upfront') || cleanText === '2') session.paymentPolicy = 'UPFRONT';
+                        else session.paymentPolicy = 'FLEXIBLE';
+
+                        session.step = 5; await session.save(); await sock.sendMessage(remoteJid, { text: `Payment policy saved: *${session.paymentPolicy}*! 💳\n\n` + getStepPrompt(5, session) }); continue;
+                    } else {
+                        const clean = cleanPhoneNumber(textMessage);
+                        if (clean.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Invalid phone number format.` }); continue; }
+                        session.vendorRealPhone = clean; session.step = 6; await session.save(); await sock.sendMessage(remoteJid, { text: `Phone number *${clean}* saved! 📞\n\n` + getStepPrompt(6, session) }); continue;
+                    }
                 }
 
                 if (session.step === 5) {
+                    const clean = cleanPhoneNumber(textMessage);
+                    if (clean.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Invalid phone number format.` }); continue; }
+                    session.vendorRealPhone = clean; session.step = 6; await session.save(); await sock.sendMessage(remoteJid, { text: `Phone number *${clean}* saved! 📞\n\n` + getStepPrompt(6, session) }); continue;
+                }
+
+                if (session.step === 6) {
+                    if (cleanText === 'skip' || cleanText === 'no' || cleanText === 'none') {
+                        session.bankDetails = "Direct / Cash Payment";
+                        session.subaccountCode = null;
+                        session.step = 7; await session.save(); await sock.sendMessage(remoteJid, { text: `Bank details skipped! ⏩\n\n` + getStepPrompt(7, session) }); continue;
+                    }
                     const parts = textMessage.split('-');
-                    if (parts.length < 2) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Use format "Bank Name - Account Number" (e.g., Opay - 8148698365).\n\n` + getStepPrompt(5) }); continue; }
+                    if (parts.length < 2) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Use format "Bank Name - Account Number" or reply *SKIP*.\n\n` + getStepPrompt(6, session) }); continue; }
 
                     const bankName = parts[0].trim();
                     const accNo = parts[1].replace(/[^0-9]/g, '');
-                    if (accNo.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Account number must be 10 digits.\n\n` + getStepPrompt(5) }); continue; }
+                    if (accNo.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Account number must be 10 digits or reply *SKIP*.\n\n` + getStepPrompt(6, session) }); continue; }
 
                     await sock.sendMessage(remoteJid, { text: `⏳ Saving your bank details...` });
                     const bankCode = await lookupBankCode(bankName);
 
                     session.bankDetails = `${bankName} - ${accNo}`;
                     session.subaccountCode = bankCode || null;
-                    session.step = 6; await session.save(); await sock.sendMessage(remoteJid, { text: `Bank details saved! 🔒\n\n` + getStepPrompt(6) }); continue;
-                }
-
-                if (session.step === 6) {
-                    if (textMessage.length < 5) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Please provide more delivery details.\n\n` + getStepPrompt(6) }); continue; }
-                    session.faqs = textMessage; session.step = 7; await session.save(); await sock.sendMessage(remoteJid, { text: `Delivery Info saved! 📝\n\n` + getStepPrompt(7) }); continue;
+                    session.step = 7; await session.save(); await sock.sendMessage(remoteJid, { text: `Bank details saved! 🔒\n\n` + getStepPrompt(7, session) }); continue;
                 }
 
                 if (session.step === 7) {
+                    if (textMessage.length < 3) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Please provide more delivery/pickup details.\n\n` + getStepPrompt(7, session) }); continue; }
+                    session.deliveryInfo = textMessage; session.step = 8; await session.save(); await sock.sendMessage(remoteJid, { text: `Delivery/Pickup info saved! 📝\n\n` + getStepPrompt(8, session) }); continue;
+                }
+
+                if (session.step === 8) {
                     if (cleanText === 'done' || cleanText === 'finish') {
                         const targetPhone = cleanPhoneNumber(session.vendorRealPhone || remoteJid);
                         await sock.sendMessage(remoteJid, { text: `⏳ *Finalizing setup... Generating your AI pairing code. Please wait a few seconds...*` });
 
                         await Vendor.findOneAndUpdate(
                             { phoneNumber: targetPhone },
-                            { jid: remoteJid, storeName: session.storeName, category: session.category, description: session.description, bankDetails: session.bankDetails, subaccountCode: session.subaccountCode, deliveryInfo: session.deliveryInfo, faqs: session.faqs, aiActive: true },
+                            { 
+                                jid: remoteJid, 
+                                storeName: session.storeName, 
+                                category: session.category, 
+                                businessType: session.businessType,
+                                paymentPolicy: session.paymentPolicy,
+                                allowNegotiation: session.allowNegotiation,
+                                maxDiscountPercent: session.maxDiscountPercent,
+                                description: session.description, 
+                                bankDetails: session.bankDetails, 
+                                subaccountCode: session.subaccountCode, 
+                                deliveryInfo: session.deliveryInfo, 
+                                faqs: session.faqs, 
+                                aiActive: true 
+                            },
                             { upsert: true, returnDocument: 'after' }
                         );
 
                         await Product.deleteMany({ vendorPhone: targetPhone });
                         if (session.products && session.products.length > 0) {
-                            for (const p of session.products) await Product.create({ vendorPhone: targetPhone, name: p.name, price: p.price, imageUrl: p.imageUrl });
+                            for (const p of session.products) {
+                                const minPrice = session.allowNegotiation && session.maxDiscountPercent > 0 
+                                    ? Math.round(p.price * (1 - session.maxDiscountPercent / 100))
+                                    : p.price;
+                                await Product.create({ 
+                                    vendorPhone: targetPhone, 
+                                    name: p.name, 
+                                    price: p.price, 
+                                    minPrice: minPrice,
+                                    isNegotiable: session.allowNegotiation,
+                                    imageUrl: p.imageUrl 
+                                });
+                            }
                         }
 
                         if (vendorSockets[targetPhone]) {
