@@ -425,6 +425,8 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     remoteJid.endsWith('@lid') ||
                     msg.key.fromMe;
 
+                const vendorData = await Vendor.findOne({ phoneNumber: cleanVendorPhone });
+
                 // Check for explicit vendor self commands
                 const VENDOR_COMMAND_KEYWORDS = ['stats', 'sales', 'dashboard', 'analytics', 'products', 'catalog', 'ai off', 'ai on', 'help', 'confirm test', 'test confirm'];
                 const isVendorCommand = VENDOR_COMMAND_KEYWORDS.some(cmd => lowerText === cmd || lowerText.startsWith('edit description ') || lowerText.startsWith('delete product '));
