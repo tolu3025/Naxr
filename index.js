@@ -420,7 +420,10 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                 const cleanRemoteJidNumber = cleanPhoneNumber(remoteJid);
                 const cleanVendorPhone = cleanPhone;
 
-                const isVendorSelfChat = cleanRemoteJidNumber === cleanVendorPhone;
+                const isVendorSelfChat = cleanRemoteJidNumber === cleanVendorPhone ||
+                    remoteJid.includes(cleanVendorPhone) ||
+                    remoteJid.endsWith('@lid') ||
+                    msg.key.fromMe;
 
                 const vendorData = await Vendor.findOne({ phoneNumber: cleanVendorPhone });
 
