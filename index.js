@@ -610,77 +610,91 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                 const activeProducts = await Product.find({ vendorPhone: cleanVendorPhone });
 
                 // Check paid command or receipt image from customer
-                const isReceiptImage = isImage && (lowerText.includes('receipt') || lowerText.includes('proof') || lowerText.includes('paid') || lowerText.includes('payment') || lowerText.includes('done') || lowerText.includes('transfer') || lowerText.length === 0);
+                const isReceiptText = ['paid', 'i have paid', 'i paid', 'payment sent', 'done paying', 'done', 'transfer done', 'sent', 'receipt', 'proof'].includes(lowerText) || lowerText.includes('screenshot') || lowerText.includes('receipt') || lowerText.includes('proof');
+                const pendingOrder = await Order.findOne({ vendorPhone: cleanVendorPhone, customerPhone: cleanRemoteJidNumber, status: 'PENDING' }).sort({ createdAt: -1 });
 
-                if (['paid', 'i have paid', 'i paid', 'payment sent', 'done paying'].includes(lowerText) || isReceiptImage) {
-                    const pendingOrder = await Order.findOne({ vendorPhone: cleanVendorPhone, customerPhone: cleanRemoteJidNumber, status: 'PENDING' }).sort({ createdAt: -1 });
-                    if (pendingOrder) {
-                        let receiptVerificationInfo = "No receipt image attached.";
-                        if (isImage) {
-                            try {
-                                await safeSendMessage(vendorSock, remoteJid, { react: { text: "⏳", key: msg.key } });
-                                const buffer = await downloadMediaMessage(msg, 'buffer', {});
-                                const base64Image = buffer.toString('base64');
+                if (pendingOrder && (isImage || isReceiptText)) {
+                    let receiptVerificationInfo = "No receipt image attached.";
+                    let isVisionFlaggedSuspicious = false;
 
-                                const visionResponse = await openai.chat.completions.create({
-                                    model: "gpt-4o-mini",
-                                    messages: [
-                                        {
-                                            role: "user",
-                                            content: [
-                                                { type: "text", text: `Analyze this image. Is it a transfer receipt or proof of payment for the amount of ₦${pendingOrder.amount}? Reply in JSON format: {"isReceipt": true/false, "confidence": "high/medium/low", "reason": "why"}` },
-                                                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
-                                            ]
-                                        }
-                                    ],
-                                    response_format: { type: "json_object" }
-                                });
-
-                                const analysis = JSON.parse(visionResponse.choices[0].message.content.trim());
-                                if (analysis.isReceipt) {
-                                    receiptVerificationInfo = `Receipt image verified with ${analysis.confidence} confidence. Reason: ${analysis.reason}`;
-                                    await safeSendMessage(vendorSock, remoteJid, { react: { text: "✅", key: msg.key } });
-                                } else {
-                                    receiptVerificationInfo = `⚠️ POSSIBLY FAKE OR INVALID RECEIPT: ${analysis.reason}`;
-                                    await safeSendMessage(vendorSock, remoteJid, { react: { text: "❌", key: msg.key } });
-                                }
-                            } catch (err) {
-                                receiptVerificationInfo = `Could not analyze image: ${err.message}`;
-                            }
-                        }
-
-                        // Generate a confirmation receipt response
-                        const receiptNumber = `REC-${Date.now().toString().slice(-6)}`;
-                        const receiptText = `🧾 *NAXR TRANSACTION RECEIPT*\n` +
-                            `────────────────────────────\n` +
-                            `Receipt No: *${receiptNumber}*\n` +
-                            `Product: *${pendingOrder.productName}*\n` +
-                            `Amount: *₦${pendingOrder.amount.toLocaleString()}*\n` +
-                            `Customer: *+${cleanRemoteJidNumber}*\n` +
-                            `Status: *AWAITING SELLER CONFIRMATION*\n` +
-                            `────────────────────────────\n\n` +
-                            `⚠️ *Please Note:* This receipt is an automated proof that you submitted your payment. It does *NOT* mean your order is automatically confirmed. The vendor must manually verify the transfer in their bank app before shipping. Thank you for your patience! 🙏`;
-
-                        await safeSendMessage(vendorSock, remoteJid, { text: receiptText });
-
-                        await safeSendMessage(vendorSock, `${cleanVendorPhone}@s.whatsapp.net`, {
-                            text: `📩 *CUSTOMER SUBMITTED PAYMENT RECEIPT!*\n\n` +
-                                `Order: *${pendingOrder.productName}* (₦${pendingOrder.amount.toLocaleString()})\n` +
-                                `Customer: +${cleanRemoteJidNumber}\n` +
-                                `Verification: ${receiptVerificationInfo}\n\n` +
-                                `👉 Please confirm your bank app and reply with *"confirm test"* to confirm payment.`
-                        });
-
-                        if (isImage) {
-                            // Forward receipt image to vendor
+                    if (isImage) {
+                        try {
+                            await safeSendMessage(vendorSock, remoteJid, { react: { text: "⏳", key: msg.key } });
                             const buffer = await downloadMediaMessage(msg, 'buffer', {});
-                            await safeSendMessage(vendorSock, `${cleanVendorPhone}@s.whatsapp.net`, {
-                                image: buffer,
-                                caption: `📄 Receipt proof sent by customer +${cleanRemoteJidNumber}`
+                            const base64Image = buffer.toString('base64');
+
+                            const visionResponse = await openai.chat.completions.create({
+                                model: "gpt-4o-mini",
+                                messages: [
+                                    {
+                                        role: "user",
+                                        content: [
+                                            { 
+                                                type: "text", 
+                                                text: `Analyze this image strictly for payment fraud. Look closely at the receipt details:
+1. Is this a valid transfer receipt/proof of payment?
+2. Does the amount shown on the receipt match ₦${pendingOrder.amount} exactly?
+3. Check for signs of digital manipulation (e.g. font mismatches, pixelation around numbers, weird spacing, alignment issues or known fake receipt generator templates).
+4. Is the date/timestamp matching or reasonable?
+
+Reply in JSON format only: {"isReceipt": true/false, "isSuspicious": true/false, "confidence": "high/medium/low", "reason": "Explain details of what you found."}` 
+                                            },
+                                            { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+                                        ]
+                                    }
+                                ],
+                                response_format: { type: "json_object" }
                             });
+
+                            const analysis = JSON.parse(visionResponse.choices[0].message.content.trim());
+                            if (analysis.isReceipt && !analysis.isSuspicious) {
+                                receiptVerificationInfo = `Verified receipt with ${analysis.confidence} confidence. Reason: ${analysis.reason}`;
+                                await safeSendMessage(vendorSock, remoteJid, { react: { text: "✅", key: msg.key } });
+                            } else {
+                                isVisionFlaggedSuspicious = true;
+                                receiptVerificationInfo = `🚨 SUSPICIOUS/FLAGGED: ${analysis.reason}`;
+                                await safeSendMessage(vendorSock, remoteJid, { react: { text: "⚠️", key: msg.key } });
+                            }
+                        } catch (err) {
+                            receiptVerificationInfo = `Could not analyze image: ${err.message}`;
                         }
-                    } else {
-                        await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ No pending orders found for your number.` });
+                    }
+
+                    // Generate a confirmation receipt response
+                    const receiptNumber = `REC-${Date.now().toString().slice(-6)}`;
+                    const receiptText = `🧾 *NAXR TRANSACTION RECEIPT*\n` +
+                        `────────────────────────────\n` +
+                        `Receipt No: *${receiptNumber}*\n` +
+                        `Product: *${pendingOrder.productName}*\n` +
+                        `Amount: *₦${pendingOrder.amount.toLocaleString()}*\n` +
+                        `Customer: *+${cleanRemoteJidNumber}*\n` +
+                        `Status: *AWAITING SELLER CONFIRMATION*\n` +
+                        `────────────────────────────\n\n` +
+                        `⚠️ *Please Note:* This receipt is an automated proof that you submitted your payment. It does *NOT* mean your order is automatically confirmed. The vendor must manually verify the transfer in their bank app before shipping. Thank you for your patience! 🙏`;
+
+                    await safeSendMessage(vendorSock, remoteJid, { text: receiptText });
+
+                    // Send alert details to vendor
+                    const vendorAlertMessage = isVisionFlaggedSuspicious 
+                        ? `🚨 *POSSIBLE FAKE RECEIPT DETECTED!*\n\n` +
+                          `Customer +${cleanRemoteJidNumber} sent a suspicious receipt for *${pendingOrder.productName}* (₦${pendingOrder.amount.toLocaleString()}).\n\n` +
+                          `⚠️ *AI Fraud Check:* ${receiptVerificationInfo}\n\n` +
+                          `👉 *Do NOT deliver* until you verify this transfer inside your bank app. If valid, reply *"confirm test"* to confirm payment.`
+                        : `📩 *CUSTOMER SUBMITTED PAYMENT RECEIPT!*\n\n` +
+                          `Order: *${pendingOrder.productName}* (₦${pendingOrder.amount.toLocaleString()})\n` +
+                          `Customer: +${cleanRemoteJidNumber}\n\n` +
+                          `🔍 *AI Verification Check:* ${receiptVerificationInfo}\n\n` +
+                          `👉 Please confirm your bank app and reply with *"confirm test"* to confirm payment.`;
+
+                    await safeSendMessage(vendorSock, `${cleanVendorPhone}@s.whatsapp.net`, { text: vendorAlertMessage });
+
+                    if (isImage) {
+                        // Forward receipt image to vendor
+                        const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                        await safeSendMessage(vendorSock, `${cleanVendorPhone}@s.whatsapp.net`, {
+                            image: buffer,
+                            caption: `📄 Receipt proof sent by customer +${cleanRemoteJidNumber}`
+                        });
                     }
                     continue;
                 }
