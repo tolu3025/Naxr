@@ -438,7 +438,13 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     if (vendorData) {
                         const daysActive = (Date.now() - new Date(vendorData.createdAt).getTime()) / (1000 * 60 * 60 * 24);
                         if (daysActive > 7 && !vendorData.isPro) {
-                            await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ *TRIAL EXPIRED:* Your 7-day Naxr AI trial has ended. Your bot is currently paused. Please subscribe to continue enjoying automated sales! 🚀` });
+                            const trialExpiredMessage = `⚠️ *TRIAL EXPIRED:* Your 7-day Naxr AI trial has ended. Your bot is currently paused.\n\n` +
+                                `To renew your subscription and keep automated sales running, please make payment to:\n\n` +
+                                `🏦 *Bank:* Kuda Microfinance Bank\n` +
+                                `🔢 *Account Number:* 3003853004\n` +
+                                `👤 *Account Name:* KUKA TECHNOLOGY AND INNOVATION LIMITED\n\n` +
+                                `👉 *After payment, simply send the transaction receipt screenshot to this chat.* Our system will verify the receipt and automatically reactivate your service! 🚀`;
+                            await safeSendMessage(vendorSock, remoteJid, { text: trialExpiredMessage });
                             continue;
                         }
                     }
@@ -569,10 +575,11 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         continue;
                     }
 
-                    // ADD PRODUCT VIA IMAGE
+                    // ADD PRODUCT OR SUSCRIPTION RECEIPT CHECK
                     if (isImage) {
                         const match = textMessage.match(/\d+/);
                         if (match) {
+                            // Vendor adding new item
                             const price = parseInt(match[0]);
                             const name = textMessage.replace(match[0], '').replace(/[#₦$-]/g, '').trim() || "Unnamed Item";
                             await safeSendMessage(vendorSock, remoteJid, { react: { text: "⏳", key: msg.key } });
@@ -581,7 +588,75 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                             await Product.create({ vendorPhone: cleanVendorPhone, name, price, imageUrl });
                             await safeSendMessage(vendorSock, remoteJid, { text: `✅ *New Product Added!*\n\n${name} - ₦${price.toLocaleString()}` });
                         } else {
-                            await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ Include product name and price in caption.` });
+                            // Evaluate as a subscription receipt upload
+                            try {
+                                await safeSendMessage(vendorSock, remoteJid, { react: { text: "⏳", key: msg.key } });
+                                const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                                const base64Image = buffer.toString('base64');
+
+                                const visionResponse = await openai.chat.completions.create({
+                                    model: "gpt-4o-mini",
+                                    messages: [
+                                        {
+                                            role: "user",
+                                            content: [
+                                                { 
+                                                    type: "text", 
+                                                    text: `Analyze this image strictly for payment verification.
+Determine if this is a transfer receipt or proof of payment:
+1. Is it a transfer to:
+   - Account: 3003853004
+   - Bank: Kuda Microfinance Bank
+   - Account Name: KUKA TECHNOLOGY AND INNOVATION LIMITED
+2. Does it look authentic without pixelation anomalies, editing artifacts, mismatches, or digital manipulation?
+
+Reply in JSON format only: {"isSubscriptionReceipt": true/false, "isSuspicious": true/false, "confidence": "high/medium/low", "reason": "Explain details."}` 
+                                                },
+                                                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+                                            ]
+                                        }
+                                    ],
+                                    response_format: { type: "json_object" }
+                                });
+
+                                const analysis = JSON.parse(visionResponse.choices[0].message.content.trim());
+                                if (analysis.isSubscriptionReceipt && !analysis.isSuspicious) {
+                                    await Vendor.findOneAndUpdate({ phoneNumber: cleanVendorPhone }, { isPro: true });
+                                    await safeSendMessage(vendorSock, remoteJid, { react: { text: "✅", key: msg.key } });
+                                    await safeSendMessage(vendorSock, remoteJid, { 
+                                        text: `🎉 *PAYMENT VERIFIED SUCCESSFULLY!*\n\nThank you! Your Naxr AI Pro Subscription has been activated. Your store is now active and automating sales again! 🚀` 
+                                    });
+
+                                    // Notify Admin of new activation
+                                    if (globalSock) {
+                                        await safeSendMessage(globalSock, `${ADMIN_PHONE}@s.whatsapp.net`, {
+                                            text: `👑 *NEW SUBSCRIPTION ACTIVATED!*\n\nVendor: ${storeName} (${cleanVendorPhone})\nReceipt Status: Verified by AI (${analysis.confidence} confidence).\nReason: ${analysis.reason}`
+                                        });
+                                        await safeSendMessage(globalSock, `${ADMIN_PHONE}@s.whatsapp.net`, {
+                                            image: buffer,
+                                            caption: `📄 Subscription Receipt for ${storeName} (${cleanVendorPhone})`
+                                        });
+                                    }
+                                } else {
+                                    await safeSendMessage(vendorSock, remoteJid, { react: { text: "❌", key: msg.key } });
+                                    await safeSendMessage(vendorSock, remoteJid, { 
+                                        text: `⚠️ *RECEIPT VERIFICATION FAILED:*\n\nReason: ${analysis.reason}\n\nIf you believe this is an error, please contact support for manual activation.` 
+                                    });
+                                    
+                                    // Alert admin of failed receipt upload
+                                    if (globalSock) {
+                                        await safeSendMessage(globalSock, `${ADMIN_PHONE}@s.whatsapp.net`, {
+                                            text: `⚠️ *FAILED/SUSPICIOUS SUBSCRIPTION RECEIPT DETECTED!*\n\nVendor: ${storeName} (${cleanVendorPhone})\nAI Review: ${analysis.reason}`
+                                        });
+                                        await safeSendMessage(globalSock, `${ADMIN_PHONE}@s.whatsapp.net`, {
+                                            image: buffer,
+                                            caption: `📄 Failed Subscription Receipt for ${storeName} (${cleanVendorPhone})`
+                                        });
+                                    }
+                                }
+                            } catch (err) {
+                                await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ Could not verify receipt at this time: ${err.message}` });
+                            }
                         }
                         continue;
                     }
@@ -907,6 +982,26 @@ async function startNaxrMasterAgent(isReconnect = false) {
                         }
                         await Auth.deleteMany({ _id: { $regex: `^vendor_${targetPhone}` } });
                         await safeSendMessage(sock, remoteJid, { text: `✅ Vendor ${targetPhone} completely purged from system.` });
+                        continue;
+                    }
+                    if (lowerText.startsWith('activate vendor ')) {
+                        const targetPhone = cleanPhoneNumber(lowerText.replace('activate vendor', '').trim());
+                        const v = await Vendor.findOneAndUpdate({ phoneNumber: targetPhone }, { isPro: true }, { new: true });
+                        if (v) {
+                            await safeSendMessage(sock, remoteJid, { text: `✅ Vendor *${v.storeName}* (${targetPhone}) is now set to **Pro/Active**!` });
+                        } else {
+                            await safeSendMessage(sock, remoteJid, { text: `⚠️ Vendor with phone number ${targetPhone} not found.` });
+                        }
+                        continue;
+                    }
+                    if (lowerText.startsWith('cancel vendor ')) {
+                        const targetPhone = cleanPhoneNumber(lowerText.replace('cancel vendor', '').trim());
+                        const v = await Vendor.findOneAndUpdate({ phoneNumber: targetPhone }, { isPro: false }, { new: true });
+                        if (v) {
+                            await safeSendMessage(sock, remoteJid, { text: `🛑 Vendor *${v.storeName}* (${targetPhone}) subscription canceled. Reverted to standard trial tier.` });
+                        } else {
+                            await safeSendMessage(sock, remoteJid, { text: `⚠️ Vendor with phone number ${targetPhone} not found.` });
+                        }
                         continue;
                     }
                 }
