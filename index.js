@@ -421,7 +421,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                 const isVendorSelfChat = cleanRemoteJidNumber === cleanVendorPhone || 
                                          remoteJid.includes(cleanVendorPhone) || 
                                          remoteJid.endsWith('@lid') || 
-                                         (msg.key.fromMe && remoteJid === `${cleanVendorPhone}@s.whatsapp.net`);
+                                         msg.key.fromMe;
 
                 const vendorData = await Vendor.findOne({ phoneNumber: cleanVendorPhone });
 
@@ -607,14 +607,76 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 
                 const activeProducts = await Product.find({ vendorPhone: cleanVendorPhone });
 
-                // Check paid command from customer
-                if (['paid', 'i have paid', 'i paid', 'payment sent', 'done paying'].includes(lowerText)) {
+                // Check paid command or receipt image from customer
+                const isReceiptImage = isImage && (lowerText.includes('receipt') || lowerText.includes('proof') || lowerText.includes('paid') || lowerText.includes('payment') || lowerText.includes('done') || lowerText.includes('transfer') || lowerText.length === 0);
+                
+                if (['paid', 'i have paid', 'i paid', 'payment sent', 'done paying'].includes(lowerText) || isReceiptImage) {
                     const pendingOrder = await Order.findOne({ vendorPhone: cleanVendorPhone, customerPhone: cleanRemoteJidNumber, status: 'PENDING' }).sort({ createdAt: -1 });
                     if (pendingOrder) {
-                        await safeSendMessage(vendorSock, remoteJid, { text: `👍 *Payment notification sent to seller!* We will verify your payment shortly. Thank you! ✨` });
+                        let receiptVerificationInfo = "No receipt image attached.";
+                        if (isImage) {
+                            try {
+                                await safeSendMessage(vendorSock, remoteJid, { react: { text: "⏳", key: msg.key } });
+                                const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                                const base64Image = buffer.toString('base64');
+                                
+                                const visionResponse = await openai.chat.completions.create({
+                                    model: "gpt-4o-mini",
+                                    messages: [
+                                        {
+                                            role: "user",
+                                            content: [
+                                                { type: "text", text: `Analyze this image. Is it a transfer receipt or proof of payment for the amount of ₦${pendingOrder.amount}? Reply in JSON format: {"isReceipt": true/false, "confidence": "high/medium/low", "reason": "why"}` },
+                                                { type: "image_url", image_url: { url: `data:image/jpeg;base64,${base64Image}` } }
+                                            ]
+                                        }
+                                    ],
+                                    response_format: { type: "json_object" }
+                                });
+                                
+                                const analysis = JSON.parse(visionResponse.choices[0].message.content.trim());
+                                if (analysis.isReceipt) {
+                                    receiptVerificationInfo = `Receipt image verified with ${analysis.confidence} confidence. Reason: ${analysis.reason}`;
+                                    await safeSendMessage(vendorSock, remoteJid, { react: { text: "✅", key: msg.key } });
+                                } else {
+                                    receiptVerificationInfo = `⚠️ POSSIBLY FAKE OR INVALID RECEIPT: ${analysis.reason}`;
+                                    await safeSendMessage(vendorSock, remoteJid, { react: { text: "❌", key: msg.key } });
+                                }
+                            } catch (err) {
+                                receiptVerificationInfo = `Could not analyze image: ${err.message}`;
+                            }
+                        }
+
+                        // Generate a confirmation receipt response
+                        const receiptNumber = `REC-${Date.now().toString().slice(-6)}`;
+                        const receiptText = `🧾 *NAXR TRANSACTION RECEIPT*\n` +
+                                            `────────────────────────────\n` +
+                                            `Receipt No: *${receiptNumber}*\n` +
+                                            `Product: *${pendingOrder.productName}*\n` +
+                                            `Amount: *₦${pendingOrder.amount.toLocaleString()}*\n` +
+                                            `Customer: *+${cleanRemoteJidNumber}*\n` +
+                                            `Status: *AWAITING SELLER CONFIRMATION*\n` +
+                                            `────────────────────────────\n\n` +
+                                            `⚠️ *Please Note:* This receipt is an automated proof that you submitted your payment. It does *NOT* mean your order is automatically confirmed. The vendor must manually verify the transfer in their bank app before shipping. Thank you for your patience! 🙏`;
+
+                        await safeSendMessage(vendorSock, remoteJid, { text: receiptText });
+                        
                         await safeSendMessage(vendorSock, `${cleanVendorPhone}@s.whatsapp.net`, { 
-                            text: `📩 *CUSTOMER REPORTED PAYMENT!*\n\nCustomer +${cleanRemoteJidNumber} reported payment for *${pendingOrder.productName}* (₦${pendingOrder.amount.toLocaleString()}).\nReply *"confirm test"* to confirm payment.` 
+                            text: `📩 *CUSTOMER SUBMITTED PAYMENT RECEIPT!*\n\n` +
+                                  `Order: *${pendingOrder.productName}* (₦${pendingOrder.amount.toLocaleString()})\n` +
+                                  `Customer: +${cleanRemoteJidNumber}\n` +
+                                  `Verification: ${receiptVerificationInfo}\n\n` +
+                                  `👉 Please confirm your bank app and reply with *"confirm test"* to confirm payment.` 
                         });
+                        
+                        if (isImage) {
+                            // Forward receipt image to vendor
+                            const buffer = await downloadMediaMessage(msg, 'buffer', {});
+                            await safeSendMessage(vendorSock, `${cleanVendorPhone}@s.whatsapp.net`, {
+                                image: buffer,
+                                caption: `📄 Receipt proof sent by customer +${cleanRemoteJidNumber}`
+                            });
+                        }
                     } else {
                         await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ No pending orders found for your number.` });
                     }
@@ -689,68 +751,29 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     try {
                         const data = JSON.parse(reply);
                         
-                        await safeSendMessage(vendorSock, remoteJid, { text: `⏳ Generating secure payment details via Flutterwave...` });
-
-                        let virtualAcc = null;
-                        let isFallback = false;
-
-                        try {
-                            virtualAcc = await createVirtualAccount(cleanRemoteJidNumber, data.price, data.productName);
-                        } catch (e) {
-                            console.log("ℹ️ Flutterwave Virtual Account generation failed. Using Vendor Direct Account fallback.");
-                            isFallback = true;
-                        }
-                        
                         const orderRefNumber = `NX-${Date.now().toString().slice(-6)}`;
+                        const vendorBank = vendorData.bankDetails || "Vendor Direct Account";
 
-                        if (virtualAcc && !isFallback) {
-                            await Order.create({
-                                vendorPhone: cleanVendorPhone,
-                                customerPhone: cleanRemoteJidNumber,
-                                productName: data.productName,
-                                amount: data.price,
-                                virtualAccountNumber: virtualAcc.accountNumber,
-                                txRef: virtualAcc.txRef,
-                                status: 'PENDING'
-                            });
-                            
-                            const testWarning = virtualAcc.isTestMode 
-                                ? `\n\n⚠️ *TEST MODE ACTIVE:* This is a test virtual account.`
-                                : '';
+                        await Order.create({
+                            vendorPhone: cleanVendorPhone,
+                            customerPhone: cleanRemoteJidNumber,
+                            productName: data.productName,
+                            amount: data.price,
+                            virtualAccountNumber: orderRefNumber,
+                            status: 'PENDING'
+                        });
 
-                            await safeSendMessage(vendorSock, remoteJid, { 
-                                text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
-                                      `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
-                                      `🏦 *Pay With Transfer:*\n` +
-                                      `Bank: *${virtualAcc.bankName}*\n` +
-                                      `Account No: *${virtualAcc.accountNumber}*\n` +
-                                      `Name: *${virtualAcc.accountName}*\n\n` +
-                                      `_This virtual account is strictly for this transaction. Our AI system will automatically confirm your order once the transfer is received!_ ✨` +
-                                      testWarning
-                            });
-                        } else {
-                            const vendorBank = vendorData.bankDetails || "Vendor Direct Account";
-                            await Order.create({
-                                vendorPhone: cleanVendorPhone,
-                                customerPhone: cleanRemoteJidNumber,
-                                productName: data.productName,
-                                amount: data.price,
-                                virtualAccountNumber: orderRefNumber,
-                                status: 'PENDING'
-                            });
-
-                            await safeSendMessage(vendorSock, remoteJid, {
-                                text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
-                                      `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
-                                      `🏦 *Payment Account Details:*\n` +
-                                      `Bank & Account: *${vendorBank}*\n` +
-                                      `Order Ref: *${orderRefNumber}*\n\n` +
-                                      `👉 Please make payment to the account above and reply with *PAID* once done! The seller will confirm your order. ✨`
-                            });
-                        }
+                        await safeSendMessage(vendorSock, remoteJid, {
+                            text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
+                                  `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
+                                  `🏦 *Payment Account Details:*\n` +
+                                  `Bank & Account: *${vendorBank}*\n` +
+                                  `Order Ref: *${orderRefNumber}*\n\n` +
+                                  `👉 Please make payment to the account above and reply by sending the *receipt screenshot* or writing *PAID*! ✨`
+                        });
                     } catch (e) {
                         console.error("❌ Checkout Processing Error:", e.message, e.stack);
-                        await safeSendMessage(vendorSock, remoteJid, { text: "⚠️ Could not generate a payment account at this time." });
+                        await safeSendMessage(vendorSock, remoteJid, { text: "⚠️ Could not initiate order details at this time." });
                     }
                 } else {
                     await safeSendMessage(vendorSock, remoteJid, { text: reply });
