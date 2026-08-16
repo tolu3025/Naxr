@@ -70,10 +70,14 @@ class _ChatsTabState extends State<ChatsTab> {
     });
 
     try {
-      final response = await http.get(
-        Uri.parse('${VendorStore.baseUrl}/api/vendor/${store.phone}/chats'),
-        headers: store.token != null ? {'Authorization': 'Bearer ${store.token}'} : null,
-      );
+      final response = await http
+          .get(
+            Uri.parse('${VendorStore.baseUrl}/api/vendor/${store.phone}/chats'),
+            headers: store.token != null
+                ? {'Authorization': 'Bearer ${store.token}'}
+                : {},
+          )
+          .timeout(const Duration(seconds: 15));
 
       if (response.statusCode == 200) {
         final List<dynamic> data = jsonDecode(response.body);
@@ -82,39 +86,17 @@ class _ChatsTabState extends State<ChatsTab> {
           _filteredChats = List.from(_chats);
         });
       } else {
-        throw Exception('Server rejected request');
+        debugPrint('Chats API error: ${response.statusCode} ${response.body}');
+        setState(() {
+          _chats = [];
+          _filteredChats = [];
+        });
       }
     } catch (e) {
-      debugPrint('Error fetching chats, using mock fallbacks: $e');
-      final mockChats = [
-        ChatListItem(
-          customerPhone: '2348123456789',
-          customerName: 'Tunde Bakare',
-          lastMessage: 'Is the vintage shirt still available?',
-          lastMessageTime: '12:30 PM',
-          unreadCount: 2,
-          aiHandled: true,
-        ),
-        ChatListItem(
-          customerPhone: '2349098765432',
-          customerName: 'Chioma Obi',
-          lastMessage: 'Alright I will make transfer now.',
-          lastMessageTime: '11:15 AM',
-          unreadCount: 0,
-          aiHandled: false,
-        ),
-        ChatListItem(
-          customerPhone: '2348055551111',
-          customerName: 'Musa Ibrahim',
-          lastMessage: 'Thanks for the fast delivery!',
-          lastMessageTime: 'Yesterday',
-          unreadCount: 0,
-          aiHandled: true,
-        ),
-      ];
+      debugPrint('Error fetching chats: $e');
       setState(() {
-        _chats = mockChats;
-        _filteredChats = List.from(_chats);
+        _chats = [];
+        _filteredChats = [];
       });
     } finally {
       setState(() {

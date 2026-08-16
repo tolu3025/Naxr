@@ -99,14 +99,9 @@ class _ChatDetailScreenState extends State<ChatDetailScreen> {
         throw Exception('Server error');
       }
     } catch (e) {
-      debugPrint('Error fetching chat history, using mocks: $e');
-      final mockHistory = [
-        Message(id: '1', text: 'Hello, do you sell shirts?', fromMe: false, timestamp: '12:00 PM'),
-        Message(id: '2', text: 'Yes! We have vintage shirts available. Let me send you the list.', fromMe: true, isAi: true, timestamp: '12:01 PM'),
-        Message(id: '3', text: 'Is the vintage shirt still available?', fromMe: false, timestamp: '12:30 PM'),
-      ];
+      debugPrint('Error fetching chat history: $e');
       setState(() {
-        _messages = mockHistory;
+        _messages = [];
       });
       _scrollToBottom();
     } finally {

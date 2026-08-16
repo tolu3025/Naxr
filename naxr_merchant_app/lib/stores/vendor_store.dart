@@ -91,121 +91,88 @@ class VendorStore extends ChangeNotifier {
 
   Future<void> setResponseMode(String mode) async {
     if (_phone == null) return;
-    try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/api/vendor/$_phone/settings'),
-        headers: _headers,
-        body: jsonEncode({'response_mode': mode}),
-      );
-      if (response.statusCode == 200) {
-        _responseMode = mode;
-        notifyListeners();
-      } else {
-        throw Exception('Failed to update mode');
-      }
-    } catch (e) {
-      debugPrint('Error updating response mode, falling back to mock: $e');
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/vendor/$_phone/settings'),
+      headers: _headers,
+      body: jsonEncode({'response_mode': mode}),
+    );
+    if (response.statusCode == 200) {
       _responseMode = mode;
       notifyListeners();
+    } else {
+      final data = jsonDecode(response.body);
+      throw Exception(data['error'] ?? 'Failed to update AI mode');
     }
   }
 
   Future<void> fetchDashboard() async {
     if (_phone == null) return;
-    try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/vendor/$_phone/dashboard'),
-        headers: _headers,
-      );
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        _businessName = data['business_name'] ?? '';
-        _isConnected = data['auth_connected'] == true;
-        _unreadMessages = data['unread_messages'] ?? 0;
-        _isPro = data['isPro'] == true;
-        _responseMode = data['response_mode'] ?? 'auto';
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/api/vendor/$_phone/dashboard'),
+          headers: _headers,
+        )
+        .timeout(const Duration(seconds: 15));
 
-        final revData = data['revenue'] ?? {};
-        _revenue = {
-          'today': (revData['today'] ?? 0).toDouble(),
-          'week': (revData['week'] ?? 0).toDouble(),
-          'month': (revData['month'] ?? 0).toDouble(),
-        };
-        notifyListeners();
-      } else {
-        throw Exception('Server error');
-      }
-    } catch (e) {
-      debugPrint('Error fetching dashboard, using fallback mocks: $e');
-      // Set fallback mocks
-      _businessName = 'Vintage Store';
-      _isConnected = false;
-      _unreadMessages = 2;
-      _isPro = false;
-      _responseMode = 'auto';
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      _businessName = data['business_name'] ?? '';
+      _isConnected = data['auth_connected'] == true;
+      _unreadMessages = data['unread_messages'] ?? 0;
+      _isPro = data['isPro'] == true;
+      _responseMode = data['response_mode'] ?? 'auto';
+
+      final revData = data['revenue'] ?? {};
       _revenue = {
-        'today': 12000.0,
-        'week': 45000.0,
-        'month': 180000.0,
+        'today': (revData['today'] ?? 0).toDouble(),
+        'week': (revData['week'] ?? 0).toDouble(),
+        'month': (revData['month'] ?? 0).toDouble(),
       };
       notifyListeners();
+    } else {
+      final data = jsonDecode(response.body);
+      throw Exception(data['error'] ?? 'Failed to load dashboard');
     }
   }
 
   Future<Map<String, dynamic>> fetchSettings() async {
     if (_phone == null) return {};
-    try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/api/vendor/$_phone/settings'),
-        headers: _headers,
-      );
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        _allowNegotiation = data['allowNegotiation'] == true;
-        _maxDiscountPercent = data['maxDiscountPercent'] ?? 0;
-        notifyListeners();
-        return data;
-      } else {
-        throw Exception('Server error');
-      }
-    } catch (e) {
-      debugPrint('Using mock settings fallback: $e');
-      final mock = {
-        'storeName': _businessName.isNotEmpty ? _businessName : 'Vintage Fashion Store',
-        'category': 'Fashion & Apparel',
-        'bankDetails': 'Access Bank - 0812345678',
-        'deliveryInfo': 'Delivery to main gate in campus, or GIGM nationwide.',
-        'aiActive': true,
-        'allowNegotiation': _allowNegotiation,
-        'maxDiscountPercent': _maxDiscountPercent,
-      };
-      return mock;
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/api/vendor/$_phone/settings'),
+          headers: _headers,
+        )
+        .timeout(const Duration(seconds: 15));
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      _allowNegotiation = data['allowNegotiation'] == true;
+      _maxDiscountPercent = data['maxDiscountPercent'] ?? 0;
+      notifyListeners();
+      return data;
+    } else {
+      final data = jsonDecode(response.body);
+      throw Exception(data['error'] ?? 'Failed to load settings');
     }
   }
 
   Future<void> saveNegotiationRules(bool allow, int maxPercent) async {
     if (_phone == null) return;
-    try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/api/vendor/$_phone/settings'),
-        headers: _headers,
-        body: jsonEncode({
-          'allowNegotiation': allow,
-          'maxDiscountPercent': maxPercent,
-        }),
-      );
-      if (response.statusCode == 200) {
-        _allowNegotiation = allow;
-        _maxDiscountPercent = maxPercent;
-        notifyListeners();
-      } else {
-        throw Exception('Server error');
-      }
-    } catch (e) {
-      debugPrint('Error saving negotiation rules, saving locally: $e');
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/vendor/$_phone/settings'),
+      headers: _headers,
+      body: jsonEncode({
+        'allowNegotiation': allow,
+        'maxDiscountPercent': maxPercent,
+      }),
+    );
+    if (response.statusCode == 200) {
       _allowNegotiation = allow;
       _maxDiscountPercent = maxPercent;
       notifyListeners();
+    } else {
+      final data = jsonDecode(response.body);
+      throw Exception(data['error'] ?? 'Failed to save settings');
     }
   }
 }

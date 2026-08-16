@@ -16,7 +16,7 @@ class LoginScreen extends StatefulWidget {
 class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _phoneController = TextEditingController();
   final TextEditingController _otpController = TextEditingController();
-  
+
   bool _otpSent = false;
   bool _isLoading = false;
   String _errorMessage = '';
@@ -55,22 +55,32 @@ class _LoginScreenState extends State<LoginScreen> {
     final formatted = _formatPhoneNumber(phone);
 
     try {
-      final response = await http.post(
-        Uri.parse('${VendorStore.baseUrl}/api/auth/vendor/login'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'phone': formatted}),
-      );
+      final response = await http
+          .post(
+            Uri.parse('${VendorStore.baseUrl}/api/auth/vendor/login'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'phone': formatted}),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      final data = jsonDecode(response.body);
+
       if (response.statusCode == 200) {
         setState(() {
           _otpSent = true;
+          _errorMessage = '';
         });
       } else {
-        throw Exception('Server rejected login request');
+        // Show actual server error (e.g. "Vendor not registered")
+        final msg = data['error'] ?? 'Login failed. Please try again.';
+        setState(() {
+          _errorMessage = msg;
+        });
       }
     } catch (err) {
-      debugPrint('API login failed, utilizing fallback mock: $err');
       setState(() {
-        _otpSent = true;
+        _errorMessage =
+            'Cannot connect to server. Please check your internet connection and try again.';
       });
     } finally {
       setState(() {
@@ -96,27 +106,39 @@ class _LoginScreenState extends State<LoginScreen> {
     final formatted = _formatPhoneNumber(_phoneController.text.trim());
 
     try {
-      final response = await http.post(
-        Uri.parse('${VendorStore.baseUrl}/api/auth/vendor/verify-otp'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'phone': formatted, 'otp': otp}),
-      );
+      final response = await http
+          .post(
+            Uri.parse('${VendorStore.baseUrl}/api/auth/vendor/verify-otp'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'phone': formatted, 'otp': otp}),
+          )
+          .timeout(const Duration(seconds: 15));
+
+      final data = jsonDecode(response.body);
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
         final token = data['token'];
+        if (token == null) {
+          setState(() {
+            _errorMessage = 'Invalid server response. Please try again.';
+          });
+          return;
+        }
         final store = Provider.of<VendorStore>(context, listen: false);
         await store.saveAuth(token, formatted);
         _navigateToDashboard();
       } else {
-        throw Exception('Verification rejected');
+        // Show actual server error (e.g. "Invalid OTP or expired")
+        final msg = data['error'] ?? 'Verification failed. Please try again.';
+        setState(() {
+          _errorMessage = msg;
+        });
       }
     } catch (err) {
-      debugPrint('Verification failed, running mock credentials bypass: $err');
-      const mockToken = 'mock-jwt-token-for-review-purposes';
-      final store = Provider.of<VendorStore>(context, listen: false);
-      await store.saveAuth(mockToken, formatted);
-      _navigateToDashboard();
+      setState(() {
+        _errorMessage =
+            'Cannot connect to server. Please check your internet connection and try again.';
+      });
     } finally {
       setState(() {
         _isLoading = false;
@@ -209,6 +231,12 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 16),
 
                 if (_otpSent) ...[
+                  const Text(
+                    '✅ OTP sent to your WhatsApp! Check your messages.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: AppTheme.primaryGreen, fontSize: 13),
+                  ),
+                  const SizedBox(height: 12),
                   TextField(
                     controller: _otpController,
                     keyboardType: TextInputType.number,
@@ -216,7 +244,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     enabled: !_isLoading,
                     decoration: const InputDecoration(
                       labelText: '6-Digit OTP Code',
-                      hintText: 'Enter code',
+                      hintText: 'Enter code sent to WhatsApp',
                       prefixIcon: Icon(Icons.lock),
                       counterText: '',
                     ),
@@ -229,18 +257,22 @@ class _LoginScreenState extends State<LoginScreen> {
                     padding: const EdgeInsets.only(bottom: 16.0),
                     child: Text(
                       _errorMessage,
-                      style: const TextStyle(color: AppTheme.dangerRed, fontSize: 13),
+                      style: const TextStyle(
+                          color: AppTheme.dangerRed, fontSize: 13),
                       textAlign: TextAlign.center,
                     ),
                   ),
 
                 ElevatedButton(
-                  onPressed: _isLoading ? null : (_otpSent ? _handleVerifyOtp : _handleSendOtp),
+                  onPressed: _isLoading
+                      ? null
+                      : (_otpSent ? _handleVerifyOtp : _handleSendOtp),
                   child: _isLoading
                       ? const SizedBox(
                           height: 20,
                           width: 20,
-                          child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                          child: CircularProgressIndicator(
+                              color: Colors.white, strokeWidth: 2),
                         )
                       : Text(_otpSent ? 'Verify & Sign In' : 'Send One-Time Passcode'),
                 ),
@@ -254,9 +286,20 @@ class _LoginScreenState extends State<LoginScreen> {
                             setState(() {
                               _otpSent = false;
                               _otpController.clear();
+                              _errorMessage = '';
                             });
                           },
                     child: const Text('Change Phone Number'),
+                  ),
+
+                if (!_otpSent)
+                  const Padding(
+                    padding: EdgeInsets.only(top: 20.0),
+                    child: Text(
+                      'You must be a registered Naxr vendor to log in.\nRegister first via WhatsApp.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
+                    ),
                   ),
               ],
             ),
