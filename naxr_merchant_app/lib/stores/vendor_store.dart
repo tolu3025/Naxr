@@ -2,9 +2,10 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import '../config.dart';
 
 class VendorStore extends ChangeNotifier {
-  static const String baseUrl = 'http://localhost:3000';
+  static const String baseUrl = AppConfig.baseUrl;
 
   String? _phone;
   String _businessName = '';

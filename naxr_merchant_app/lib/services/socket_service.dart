@@ -1,9 +1,10 @@
 import 'package:flutter/foundation.dart';
 import 'package:socket_io_client/socket_io_client.dart' as io;
+import '../config.dart';
 
 class SocketService {
   io.Socket? _socket;
-  final String _baseUrl = 'http://localhost:3000';
+  final String _baseUrl = AppConfig.baseUrl;
 
   io.Socket? get socket => _socket;
 

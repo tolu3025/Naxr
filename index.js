@@ -96,6 +96,35 @@ const RegSession = mongoose.model('RegSession', new mongoose.Schema({
 
 const Auth = mongoose.model('Auth', new mongoose.Schema({ _id: String, data: String }));
 
+const Message = mongoose.model('Message', new mongoose.Schema({
+    vendorPhone: { type: String, required: true },
+    customerPhone: { type: String, required: true },
+    text: { type: String, required: true },
+    fromMe: { type: Boolean, required: true },
+    isAi: { type: Boolean, default: false },
+    timestamp: { type: Date, default: Date.now }
+}));
+
+const Otp = mongoose.model('Otp', new mongoose.Schema({
+    phone: { type: String, required: true, unique: true },
+    code: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now, expires: 300 }
+}));
+
+const Session = mongoose.model('Session', new mongoose.Schema({
+    vendorPhone: { type: String, required: true },
+    token: { type: String, required: true, unique: true },
+    createdAt: { type: Date, default: Date.now, expires: 2592000 }
+}));
+
+const Knowledge = mongoose.model('Knowledge', new mongoose.Schema({
+    vendorPhone: { type: String, required: true },
+    title: { type: String, required: true },
+    content: { type: String, required: true },
+    sourceUrl: String,
+    createdAt: { type: Date, default: Date.now }
+}));
+
 async function useMongoDBAuthState(sessionId = 'creds') {
     const writeData = async (data, id) => {
         await Auth.updateOne({ _id: `${sessionId}-${id}` }, { $set: { data: JSON.stringify(data, BufferJSON.replacer) } }, { upsert: true });
@@ -260,6 +289,34 @@ async function safeSendMessage(sock, jid, content, options = {}) {
                 if (botMessageIds.size > 3000) {
                     const firstKey = botMessageIds.values().next().value;
                     botMessageIds.delete(firstKey);
+                }
+                
+                try {
+                    const vendorPhone = Object.keys(vendorSockets).find(phone => vendorSockets[phone] === sock);
+                    if (vendorPhone && jid && jid.endsWith('@s.whatsapp.net')) {
+                        const customerPhone = cleanPhoneNumber(jid);
+                        const text = content.text || content.caption || "";
+                        if (text && customerPhone !== vendorPhone) {
+                            await Message.create({
+                                vendorPhone,
+                                customerPhone,
+                                text,
+                                fromMe: true,
+                                isAi: !options.manual
+                            });
+                            if (typeof notifyVendorClients === 'function') {
+                                notifyVendorClients(vendorPhone, 'ai_replied', {
+                                    customer_phone: customerPhone,
+                                    text,
+                                    fromMe: true,
+                                    isAi: !options.manual,
+                                    timestamp: new Date().toISOString()
+                                });
+                            }
+                        }
+                    }
+                } catch (e) {
+                    console.error("Failed to log outgoing message:", e.message);
                 }
             }
             
@@ -500,6 +557,24 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     remoteJid.includes(cleanVendorPhone) ||
                     remoteJid.endsWith('@lid') ||
                     msg.key.fromMe;
+
+                if (!isVendorSelfChat) {
+                    await Message.create({
+                        vendorPhone: cleanVendorPhone,
+                        customerPhone: cleanRemoteJidNumber,
+                        text: textMessage || (isImage ? "[Image]" : "[Media]"),
+                        fromMe: false,
+                        isAi: false
+                    });
+                    if (typeof notifyVendorClients === 'function') {
+                        notifyVendorClients(cleanVendorPhone, 'new_message', {
+                            customer_phone: cleanRemoteJidNumber,
+                            text: textMessage || (isImage ? "[Image]" : "[Media]"),
+                            fromMe: false,
+                            timestamp: new Date().toISOString()
+                        });
+                    }
+                }
 
                 const vendorData = await Vendor.findOne({ phoneNumber: cleanVendorPhone });
 
@@ -1566,6 +1641,371 @@ app.post('/webhook/korapay', express.raw({ type: 'application/json' }), async (r
 // Global JSON parser must come AFTER raw webhook route
 app.use(express.json());
 
+// CORS and Preflight
+app.use((req, res, next) => {
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS, PUT, PATCH, DELETE");
+    res.setHeader("Access-Control-Allow-Headers", "X-Requested-With,content-type,authorization");
+    res.setHeader("Access-Control-Allow-Credentials", "true");
+    if (req.method === "OPTIONS") {
+        return res.sendStatus(200);
+    }
+    next();
+});
+
+const checkAuth = async (req, res, next) => {
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return res.status(401).json({ error: "Missing or invalid authorization header" });
+    }
+    const token = authHeader.split(" ")[1];
+    const session = await Session.findOne({ token });
+    if (!session) {
+        return res.status(401).json({ error: "Invalid token or expired session" });
+    }
+    req.vendorPhone = session.vendorPhone;
+    next();
+};
+
+// Admin Pairing Routes
+app.get('/api/admin/pair-code', async (req, res) => {
+    try {
+        const myNumber = cleanPhoneNumber(ADMIN_PHONE);
+        if (!myNumber) {
+            return res.status(400).json({ error: "ADMIN_PHONE is not configured" });
+        }
+        if (globalSock) {
+            const code = await globalSock.requestPairingCode(myNumber);
+            return res.json({ pairingCode: code });
+        } else {
+            return res.status(500).json({ error: "Master agent socket not initialized" });
+        }
+    } catch (err) {
+        return res.status(500).json({ error: err.message });
+    }
+});
+
+app.get('/api/admin/reset-session', async (req, res) => {
+    try {
+        if (globalSock) {
+            globalSock.ev.removeAllListeners('connection.update');
+            globalSock.ev.removeAllListeners('creds.update');
+            globalSock.ev.removeAllListeners('messages.upsert');
+            try { globalSock.ws.close(); } catch (e) { }
+            globalSock = null;
+        }
+        await Auth.deleteMany({ _id: { $regex: '^master_agent_session' } });
+        startNaxrMasterAgent();
+        res.json({ message: "Admin master agent session reset. Check console logs or call /api/admin/pair-code for new pairing code." });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+// Portal Authentication Routes
+app.post('/api/auth/vendor/login', async (req, res) => {
+    try {
+        const { phone } = req.body;
+        const cleaned = cleanPhoneNumber(phone);
+        if (!cleaned) return res.status(400).json({ error: "Invalid phone number" });
+
+        const vendor = await Vendor.findOne({ phoneNumber: cleaned });
+        if (!vendor) return res.status(404).json({ error: "Vendor not registered. Please register on WhatsApp first." });
+
+        const code = Math.floor(100000 + Math.random() * 900000).toString();
+        await Otp.findOneAndUpdate({ phone: cleaned }, { code, createdAt: new Date() }, { upsert: true });
+
+        const targetJid = `${cleaned}@s.whatsapp.net`;
+        const text = `🔐 *Naxr Merchant Portal Login Code:* ${code}\n\nDo not share this code with anyone. It expires in 5 minutes.`;
+
+        let sent = false;
+        if (vendorSockets[cleaned]) {
+            await safeSendMessage(vendorSockets[cleaned], targetJid, { text });
+            sent = true;
+        } else if (globalSock) {
+            await safeSendMessage(globalSock, targetJid, { text });
+            sent = true;
+        }
+
+        return res.json({ success: sent, message: sent ? "OTP sent successfully to your WhatsApp!" : "Failed to send OTP via WhatsApp. Please try again." });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/auth/vendor/verify-otp', async (req, res) => {
+    try {
+        const { phone, otp } = req.body;
+        const cleaned = cleanPhoneNumber(phone);
+        if (!cleaned || !otp) return res.status(400).json({ error: "Missing phone or OTP" });
+
+        const record = await Otp.findOne({ phone: cleaned, code: otp });
+        if (!record) return res.status(400).json({ error: "Invalid OTP or expired." });
+
+        await Otp.deleteOne({ phone: cleaned });
+
+        const token = crypto.randomBytes(32).toString('hex');
+        await Session.create({ vendorPhone: cleaned, token });
+
+        return res.json({ token });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+// Vendor Settings & Dashboard
+app.get('/api/vendor/:phone/dashboard', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized access" });
+
+        const vendor = await Vendor.findOne({ phoneNumber: phone });
+        if (!vendor) return res.status(404).json({ error: "Vendor not found" });
+
+        const paidCount = await Order.countDocuments({ vendorPhone: phone, status: 'PAID' });
+        const pendingCount = await Order.countDocuments({ vendorPhone: phone, status: 'PENDING' });
+
+        const startOfToday = new Date(); startOfToday.setHours(0,0,0,0);
+        const startOfWeek = new Date(); startOfWeek.setDate(startOfWeek.getDate() - 7);
+        const startOfMonth = new Date(); startOfMonth.setDate(startOfMonth.getDate() - 30);
+
+        const todayRev = await Order.aggregate([
+            { $match: { vendorPhone: phone, status: 'PAID', createdAt: { $gte: startOfToday } } },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+        const weekRev = await Order.aggregate([
+            { $match: { vendorPhone: phone, status: 'PAID', createdAt: { $gte: startOfWeek } } },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+        const monthRev = await Order.aggregate([
+            { $match: { vendorPhone: phone, status: 'PAID', createdAt: { $gte: startOfMonth } } },
+            { $group: { _id: null, total: { $sum: '$amount' } } }
+        ]);
+
+        return res.json({
+            business_name: vendor.storeName,
+            auth_connected: !!(vendorSockets[phone] && vendorSockets[phone].authState?.creds?.registered),
+            unread_messages: 0,
+            isPro: vendor.isPro,
+            response_mode: vendor.aiActive ? "auto" : "manual",
+            revenue: {
+                today: todayRev[0]?.total || 0,
+                week: weekRev[0]?.total || 0,
+                month: monthRev[0]?.total || 0
+            }
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/vendor/:phone/settings', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized access" });
+
+        const vendor = await Vendor.findOne({ phoneNumber: phone });
+        if (!vendor) return res.status(404).json({ error: "Vendor not found" });
+
+        return res.json({
+            storeName: vendor.storeName,
+            category: vendor.category,
+            bankDetails: vendor.bankDetails,
+            deliveryInfo: vendor.deliveryInfo,
+            aiActive: vendor.aiActive,
+            allowNegotiation: vendor.allowNegotiation,
+            maxDiscountPercent: vendor.maxDiscountPercent
+        });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/vendor/:phone/settings', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized access" });
+
+        const { response_mode, allowNegotiation, maxDiscountPercent } = req.body;
+        const updates = {};
+        if (response_mode !== undefined) updates.aiActive = (response_mode === "auto");
+        if (allowNegotiation !== undefined) updates.allowNegotiation = allowNegotiation;
+        if (maxDiscountPercent !== undefined) updates.maxDiscountPercent = maxDiscountPercent;
+
+        const vendor = await Vendor.findOneAndUpdate({ phoneNumber: phone }, updates, { new: true });
+        if (!vendor) return res.status(404).json({ error: "Vendor not found" });
+
+        return res.json({ success: true, vendor });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+// Products Routes
+app.get('/api/vendor/:phone/products', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized access" });
+
+        const products = await Product.find({ vendorPhone: phone });
+        return res.json(products);
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/vendor/:phone/products', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized" });
+
+        const { name, price, imageUrl } = req.body;
+        if (!name || !price) return res.status(400).json({ error: "Missing name or price" });
+
+        const p = await Product.create({ vendorPhone: phone, name, price, imageUrl });
+        return res.json(p);
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/vendor/:phone/products/:id', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized" });
+
+        await Product.deleteOne({ vendorPhone: phone, _id: req.params.id });
+        return res.json({ success: true });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+// Knowledge Base Routes
+app.get('/api/vendor/:phone/knowledge', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized" });
+
+        const k = await Knowledge.find({ vendorPhone: phone });
+        return res.json(k);
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/vendor/:phone/knowledge', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized" });
+
+        const { title, content } = req.body;
+        if (!title || !content) return res.status(400).json({ error: "Missing title or content" });
+
+        const k = await Knowledge.create({ vendorPhone: phone, title, content });
+        return res.json(k);
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/vendor/:phone/knowledge/scrape', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized" });
+
+        const { url } = req.body;
+        if (!url) return res.status(400).json({ error: "Missing URL" });
+
+        const response = await axios.get(url);
+        const text = response.data.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+        const title = text.slice(0, 30) + "...";
+        const k = await Knowledge.create({ vendorPhone: phone, title, content: text.slice(0, 2000), sourceUrl: url });
+        return res.json(k);
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.delete('/api/vendor/:phone/knowledge/:id', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized" });
+
+        await Knowledge.deleteOne({ vendorPhone: phone, _id: req.params.id });
+        return res.json({ success: true });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+// Realtime Chat & Inbox Routes
+app.get('/api/vendor/:phone/chats', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized" });
+
+        const chats = await Message.aggregate([
+            { $match: { vendorPhone: phone } },
+            { $sort: { timestamp: -1 } },
+            { $group: {
+                _id: "$customerPhone",
+                last_message: { $first: "$text" },
+                last_message_time: { $first: "$timestamp" },
+                ai_handled: { $first: "$isAi" }
+            }},
+            { $project: {
+                customer_phone: "$_id",
+                last_message: 1,
+                last_message_time: 1,
+                unread_count: { $literal: 0 },
+                ai_handled: 1
+            }}
+        ]);
+        return res.json(chats);
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/vendor/:phone/chats/:customerPhone', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized" });
+
+        const messages = await Message.find({ vendorPhone: phone, customerPhone: req.params.customerPhone }).sort({ timestamp: 1 });
+        const list = messages.map(m => ({
+            id: m._id.toString(),
+            text: m.text,
+            fromMe: m.fromMe,
+            isAi: m.isAi,
+            timestamp: m.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+        }));
+        return res.json(list);
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
+app.post('/api/vendor/:phone/send-message', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized" });
+
+        const { customer_phone, message } = req.body;
+        const targetJid = `${customer_phone}@s.whatsapp.net`;
+        const vSock = vendorSockets[phone];
+        if (vSock) {
+            await safeSendMessage(vSock, targetJid, { text: message }, { manual: true });
+            return res.json({ success: true });
+        } else {
+            return res.status(400).json({ error: "WhatsApp socket not connected for this vendor." });
+        }
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+
 // ----------------------------------------------------
 // 7. AUTO-BOOT ALL VENDORS
 // ----------------------------------------------------
@@ -1586,6 +2026,37 @@ app.get('/', (req, res) => res.send('Naxr AI Engine Active! 🚀'));
 
 const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => console.log(`🌐 Server active on port ${PORT}`));
+
+const { Server } = require("socket.io");
+const io = new Server(server, {
+    cors: {
+        origin: "*",
+        methods: ["GET", "POST"]
+    }
+});
+
+io.on("connection", (socket) => {
+    const vendorPhone = socket.handshake.query.vendor_phone;
+    if (vendorPhone) {
+        socket.join(vendorPhone);
+        console.log(`🔌 Socket client connected for vendor ${vendorPhone}`);
+    }
+
+    socket.on("register_vendor", (data) => {
+        if (data?.vendor_phone) {
+            socket.join(data.vendor_phone);
+            console.log(`🔌 Socket client registered for vendor ${data.vendor_phone}`);
+        }
+    });
+
+    socket.on("disconnect", () => {
+        console.log("🔌 Socket client disconnected");
+    });
+});
+
+function notifyVendorClients(vendorPhone, eventName, data) {
+    io.to(vendorPhone).emit(eventName, data);
+}
 
 mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log("📦 Connected to MongoDB Atlas Cloud!"))
