@@ -25,6 +25,8 @@ class VendorStore extends ChangeNotifier {
   bool get isPro => _isPro;
   int get unreadMessages => _unreadMessages;
   Map<String, double> get revenue => _revenue;
+  List<Map<String, dynamic>> _recentOrders = [];
+  List<Map<String, dynamic>> get recentOrders => _recentOrders;
 
   bool get allowNegotiation => _allowNegotiation;
   int get maxDiscountPercent => _maxDiscountPercent;
@@ -128,6 +130,7 @@ class VendorStore extends ChangeNotifier {
         'week': (revData['week'] ?? 0).toDouble(),
         'month': (revData['month'] ?? 0).toDouble(),
       };
+      _recentOrders = List<Map<String, dynamic>>.from(data['recent_orders'] ?? []);
       notifyListeners();
     } else {
       final data = jsonDecode(response.body);

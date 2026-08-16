@@ -17,13 +17,7 @@ class TabsScreen extends StatefulWidget {
 
 class _TabsScreenState extends State<TabsScreen> {
   int _currentIndex = 0;
-
-  final List<Widget> _tabs = [
-    const DashboardTab(),
-    const ChatsTab(),
-    const ProductsTab(),
-    const SettingsTab(),
-  ];
+  late final List<Widget> _tabs;
 
   final List<String> _titles = [
     'Naxr Dashboard',
@@ -35,6 +29,16 @@ class _TabsScreenState extends State<TabsScreen> {
   @override
   void initState() {
     super.initState();
+    _tabs = [
+      DashboardTab(onSelectTab: (index) {
+        setState(() {
+          _currentIndex = index;
+        });
+      }),
+      const ChatsTab(),
+      const ProductsTab(),
+      const SettingsTab(),
+    ];
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initSocket();
     });

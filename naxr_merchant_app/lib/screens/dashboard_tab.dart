@@ -6,7 +6,8 @@ import '../theme.dart';
 import 'knowledge_screen.dart';
 
 class DashboardTab extends StatefulWidget {
-  const DashboardTab({super.key});
+  final void Function(int)? onSelectTab;
+  const DashboardTab({super.key, this.onSelectTab});
 
   @override
   State<DashboardTab> createState() => _DashboardTabState();
@@ -29,17 +30,18 @@ class _DashboardTabState extends State<DashboardTab> {
     });
 
     final store = Provider.of<VendorStore>(context, listen: false);
-    await store.fetchDashboard();
-
-    // Mock recent orders
-    setState(() {
-      _recentOrders = [
-        {'id': '1', 'customerPhone': '23480355589', 'amount': 12000.0, 'status': 'PAID', 'date': 'Today'},
-        {'id': '2', 'customerPhone': '23490511112', 'amount': 4500.0, 'status': 'PENDING', 'date': 'Today'},
-        {'id': '3', 'customerPhone': '23481499966', 'amount': 15000.0, 'status': 'BOOKED', 'date': 'Yesterday'},
-      ];
-      _isLoading = false;
-    });
+    try {
+      await store.fetchDashboard();
+      setState(() {
+        _recentOrders = store.recentOrders;
+      });
+    } catch (e) {
+      debugPrint('Error loading dashboard: $e');
+    } finally {
+      setState(() {
+        _isLoading = false;
+      });
+    }
   }
 
   @override
@@ -225,28 +227,27 @@ class _DashboardTabState extends State<DashboardTab> {
                         icon: Icons.inventory_2_outlined,
                         label: 'Products',
                         onTap: () {
-                          // Tap controller navigation can be handled or we prompt user
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Swipe to Products tab')),
-                          );
+                          if (widget.onSelectTab != null) {
+                            widget.onSelectTab!(2);
+                          }
                         },
                       ),
                       _buildGridCard(
                         icon: Icons.chat_bubble_outline,
                         label: 'Chats Inbox',
                         onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Swipe to Chats tab')),
-                          );
+                          if (widget.onSelectTab != null) {
+                            widget.onSelectTab!(1);
+                          }
                         },
                       ),
                       _buildGridCard(
                         icon: Icons.psychology_outlined,
                         label: 'AI Config',
                         onTap: () {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('Swipe to Settings tab')),
-                          );
+                          if (widget.onSelectTab != null) {
+                            widget.onSelectTab!(3);
+                          }
                         },
                       ),
                       _buildGridCard(
@@ -353,6 +354,20 @@ class _DashboardTabState extends State<DashboardTab> {
         badgeColor = AppTheme.primaryGreen;
     }
 
+    String dateStr = order['date'] ?? '';
+    try {
+      final parsed = DateTime.parse(dateStr).toLocal();
+      final now = DateTime.now();
+      final difference = now.difference(parsed).inDays;
+      if (difference == 0 && now.day == parsed.day) {
+        dateStr = 'Today ${DateFormat('h:mm a').format(parsed)}';
+      } else if (difference <= 1 && now.subtract(const Duration(days: 1)).day == parsed.day) {
+        dateStr = 'Yesterday ${DateFormat('h:mm a').format(parsed)}';
+      } else {
+        dateStr = DateFormat('dd MMM, h:mm a').format(parsed);
+      }
+    } catch (_) {}
+
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
       child: Padding(
@@ -369,7 +384,7 @@ class _DashboardTabState extends State<DashboardTab> {
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  order['date'],
+                  dateStr,
                   style: const TextStyle(color: Colors.grey, fontSize: 12),
                 ),
               ],

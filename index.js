@@ -997,6 +997,10 @@ Reply in JSON format only: {"isReceipt": true/false, "isSuspicious": true/false,
                     ? `This business operates on PAY ON BOARD / PAY AT SERVICE. Payment is NOT required upfront.`
                     : `Payment is required UPFRONT to confirm order.`;
 
+                // Fetch vendor custom knowledge base/FAQs
+                const vendorKnowledgeDocs = await Knowledge.find({ vendorPhone: cleanVendorPhone });
+                const knowledgeText = vendorKnowledgeDocs.map(k => `Title: ${k.title}\nContent: ${k.content}`).join("\n\n");
+
                 const customerAI = await openai.chat.completions.create({
                     model: "gpt-4o-mini",
                     messages: [
@@ -1005,6 +1009,9 @@ Reply in JSON format only: {"isReceipt": true/false, "isSuspicious": true/false,
                             content: `You are Naxr, sales & booking rep for ${storeName} (${vendorData.category || 'Business'}). Today's date is ${todayDateStr}.
 Business Description: ${vendorData.description || 'N/A'}
 Delivery/Service Info: ${vendorData.deliveryInfo || 'N/A'}
+
+Additional Store Knowledge & FAQ Info:
+${knowledgeText || 'No additional custom knowledge loaded.'}
 
 Catalog / Services:
 ${catalog}
@@ -1018,6 +1025,7 @@ Rules:
                         { role: "user", content: textMessage }
                     ]
                 });
+
 
                 const reply = customerAI.choices[0].message.content.trim();
 
@@ -1782,6 +1790,18 @@ app.get('/api/vendor/:phone/dashboard', checkAuth, async (req, res) => {
             { $group: { _id: null, total: { $sum: '$amount' } } }
         ]);
 
+        const recentOrdersDocs = await Order.find({ vendorPhone: phone })
+            .sort({ createdAt: -1 })
+            .limit(10);
+
+        const recentOrders = recentOrdersDocs.map(o => ({
+            id: o._id.toString(),
+            customerPhone: o.customerPhone,
+            amount: o.amount,
+            status: o.status,
+            date: o.createdAt.toISOString()
+        }));
+
         return res.json({
             business_name: vendor.storeName,
             auth_connected: !!(vendorSockets[phone] && vendorSockets[phone].authState?.creds?.registered),
@@ -1792,7 +1812,8 @@ app.get('/api/vendor/:phone/dashboard', checkAuth, async (req, res) => {
                 today: todayRev[0]?.total || 0,
                 week: weekRev[0]?.total || 0,
                 month: monthRev[0]?.total || 0
-            }
+            },
+            recent_orders: recentOrders
         });
     } catch (e) {
         return res.status(500).json({ error: e.message });
