@@ -1,0 +1,31 @@
+{
+  "expo": {
+    "name": "Naxr Merchant",
+    "slug": "naxr-merchant",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "package": "com.softdev21.naxrmerchant"
+    },
+    "plugins": [
+      "expo-router"
+    ],
+    "scheme": "naxr",
+    "extra": {
+      "router": {
+        "origin": false
+      },
+      "eas": {
+        "projectId": "5e12f264-1a0e-4cca-82a3-007fd230b6eb"
+      }
+    },
+    "owner": "softdev21"
+  }
+}

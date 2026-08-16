@@ -157,14 +157,14 @@ async function transcribeVoiceNote(msg) {
 }
 
 // ----------------------------------------------------
-// 2. FLUTTERWAVE VIRTUAL ACCOUNT & BANK LOOKUP ENGINE
+// 2. KORAPAY VIRTUAL ACCOUNT & BANK LOOKUP ENGINE
 // ----------------------------------------------------
 async function lookupBankCode(bankNameRaw) {
     try {
-        const apiKey = process.env.FLUTTERWAVE_SECRET_KEY;
+        const apiKey = process.env.KORAPAY_SECRET_KEY;
         if (!apiKey) return null;
 
-        const banksRes = await axios.get('https://api.flutterwave.com/v3/banks/NG', {
+        const banksRes = await axios.get('https://api.korapay.com/merchant/api/v1/misc/banks?countryCode=NG', {
             headers: { Authorization: `Bearer ${apiKey}` },
             timeout: 10000
         });
@@ -175,24 +175,26 @@ async function lookupBankCode(bankNameRaw) {
         const bank = banks.find(b => b.name.toLowerCase().includes(bankNameRaw.toLowerCase().trim())) || banks[0];
         return bank ? bank.code : null;
     } catch (error) {
-        console.error("⚠️ Flutterwave Bank Code Error (non-fatal):", error?.response?.data || error.message);
+        console.error("⚠️ Korapay Bank Code Error (non-fatal):", error?.response?.data || error.message);
         return null;
     }
 }
 
-async function createVirtualAccount(customerPhone, amount, productName) {
+async function createKorapayVirtualAccount(customerPhone, amount, productName) {
     try {
-        const apiKey = process.env.FLUTTERWAVE_SECRET_KEY;
-        if (!apiKey) throw new Error("No Flutterwave API key");
+        const apiKey = process.env.KORAPAY_SECRET_KEY;
+        if (!apiKey) throw new Error("No Korapay API key");
 
         const ref = `BOT-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-        const response = await axios.post('https://api.flutterwave.com/v3/virtual-account-numbers', {
-            email: `buyer_${customerPhone}_${Date.now()}@naxr.com`,
-            amount: amount,
-            tx_ref: ref,
-            is_permanent: false,
-            narration: `Naxr - ${productName || 'Order'}`
+        const response = await axios.post('https://api.korapay.com/merchant/api/v1/virtual-bank-account', {
+            account_name: `Naxr - ${customerPhone}`,
+            account_reference: ref,
+            bank_code: "035", // Wema Bank is reliable and default
+            customer: {
+                name: `Buyer ${customerPhone}`,
+                email: `buyer_${customerPhone}_${Date.now()}@naxr.com`
+            }
         }, {
             headers: {
                 Authorization: `Bearer ${apiKey}`,
@@ -201,20 +203,19 @@ async function createVirtualAccount(customerPhone, amount, productName) {
             timeout: 15000
         });
 
-        if (response.data && response.data.status === 'success') {
+        if (response.data && response.data.status === true) {
             return {
                 accountNumber: response.data.data.account_number,
                 bankName: response.data.data.bank_name,
                 accountName: response.data.data.account_name || "Naxr Payment",
-                txRef: ref,
-                isTestMode: apiKey.startsWith('FLWTEST')
+                txRef: ref
             };
         } else {
             throw new Error(response.data.message || "Failed to generate virtual account");
         }
     } catch (error) {
-        console.error("⚠️ Flutterwave Virtual Account Error:", error?.response?.data || error.message);
-        throw new Error("Failed to create virtual account. Please verify your Flutterwave keys.");
+        console.error("⚠️ Korapay Virtual Account Error:", error?.response?.data || error.message);
+        throw new Error("Failed to create virtual account. Please verify your Korapay keys.");
     }
 }
 
@@ -227,29 +228,59 @@ const ADMIN_PHONE = process.env.ADMIN_PHONE || "2348148698365";
 
 const botMessageIds = new Set();
 
+const sendQueue = {};
+
 async function safeSendMessage(sock, jid, content, options = {}) {
     if (!sock) return null;
-    try {
-        const sent = await sock.sendMessage(jid, content, options);
-        if (sent?.key?.id) {
-            botMessageIds.add(sent.key.id);
-            if (botMessageIds.size > 3000) {
-                const firstKey = botMessageIds.values().next().value;
-                botMessageIds.delete(firstKey);
-            }
-        }
-        return sent;
-    } catch (err) {
-        console.error("❌ safeSendMessage Error:", err.message);
-        return null;
+    
+    // Create a unique key for the queue based on socket configuration and receiver JID
+    const queueKey = `${sock.authState?.creds?.me?.id || 'default'}-${jid}`;
+    if (!sendQueue[queueKey]) {
+        sendQueue[queueKey] = Promise.resolve();
     }
+
+    const sendPromise = sendQueue[queueKey].then(async () => {
+        try {
+            // Trigger "composing" presence status to mimic human typing
+            try {
+                await sock.sendPresenceUpdate('composing', jid);
+            } catch (e) {}
+
+            // Random delay between 1.5 to 3.5 seconds to feel organic
+            const typingTime = 1500 + Math.random() * 2000;
+            await delay(typingTime);
+
+            try {
+                await sock.sendPresenceUpdate('paused', jid);
+            } catch (e) {}
+
+            const sent = await sock.sendMessage(jid, content, options);
+            if (sent?.key?.id) {
+                botMessageIds.add(sent.key.id);
+                if (botMessageIds.size > 3000) {
+                    const firstKey = botMessageIds.values().next().value;
+                    botMessageIds.delete(firstKey);
+                }
+            }
+            
+            // Post-send cool-off spacing of 500ms before sending the next one
+            await delay(500);
+            return sent;
+        } catch (err) {
+            console.error("❌ safeSendMessage Error:", err.message);
+            return null;
+        }
+    });
+
+    sendQueue[queueKey] = sendPromise.catch(() => {});
+    return sendPromise;
 }
 
 const REG_TRIGGERS = [
     'i want to register', 'how do i register', 'register my business', 'know more about this ai',
     'hi can i know more', 'register', 'registration', 'sign up', 'signup', 'onboard',
     'create store', 'create account', 'join naxr', 'setup bot', 'set up bot', 'link my whatsapp',
-    'tell me about naxr', 'how does this work', 'how to use naxr', 'get started', 'how to register'
+    'tell me about naxr', 'how does this work', 'how to use naxr', 'get started', 'how to register', 'yes'
 ];
 
 const CATALOG_TRIGGERS = [
@@ -919,21 +950,21 @@ Rules:
                     try {
                         const data = JSON.parse(reply);
 
-                        const orderRefNumber = `NX-${Date.now().toString().slice(-6)}`;
-                        const vendorBank = vendorData.bankDetails || "Vendor Direct Account";
                         const isPayOnBoard = (paymentPolicy === 'PAY_ON_BOARD' || businessType === 'SERVICE_TRANSPORT');
-
-                        await Order.create({
-                            vendorPhone: cleanVendorPhone,
-                            customerPhone: cleanRemoteJidNumber,
-                            productName: data.productName,
-                            amount: data.price,
-                            paymentPolicy: paymentPolicy,
-                            virtualAccountNumber: orderRefNumber,
-                            status: isPayOnBoard ? 'BOOKED' : 'PENDING'
-                        });
+                        const vendorBank = vendorData.bankDetails || "Vendor Direct Account";
 
                         if (isPayOnBoard) {
+                            const orderRefNumber = `NX-${Date.now().toString().slice(-6)}`;
+                            await Order.create({
+                                vendorPhone: cleanVendorPhone,
+                                customerPhone: cleanRemoteJidNumber,
+                                productName: data.productName,
+                                amount: data.price,
+                                paymentPolicy: paymentPolicy,
+                                virtualAccountNumber: orderRefNumber,
+                                status: 'BOOKED'
+                            });
+
                             await safeSendMessage(vendorSock, remoteJid, {
                                 text: `🚌 *Booking Confirmed: ${data.productName}*\n\n` +
                                     `💰 *Fare / Price:* ₦${data.price.toLocaleString()}\n` +
@@ -946,15 +977,54 @@ Rules:
                                 text: `🔔 *NEW SERVICE BOOKING!*\n\nService/Route: ${data.productName}\nFare: ₦${data.price.toLocaleString()}\nCustomer: +${cleanRemoteJidNumber}\nPayment Mode: Pay on Boarding/Delivery`
                             });
                         } else {
-                            await safeSendMessage(vendorSock, remoteJid, {
-                                text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
-                                    `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
-                                    `🏦 *Payment Account Details:*\n` +
-                                    `Bank & Account: *${vendorBank}*\n` +
-                                    `Order Ref: *${orderRefNumber}*\n\n` +
-                                    `👉 Please make payment to the account above and reply by sending *PAID* or sharing your receipt! ✨\n` +
-                                    `*(Note: The vendor will verify your transfer and confirm your order).*`
-                            });
+                            try {
+                                await safeSendMessage(vendorSock, remoteJid, { text: `⏳ *Generating your secure payment account details...*` });
+                                const vAcc = await createKorapayVirtualAccount(cleanRemoteJidNumber, data.price, data.productName);
+
+                                await Order.create({
+                                    vendorPhone: cleanVendorPhone,
+                                    customerPhone: cleanRemoteJidNumber,
+                                    productName: data.productName,
+                                    amount: data.price,
+                                    paymentPolicy: paymentPolicy,
+                                    virtualAccountNumber: vAcc.accountNumber,
+                                    txRef: vAcc.txRef,
+                                    status: 'PENDING'
+                                });
+
+                                await safeSendMessage(vendorSock, remoteJid, {
+                                    text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
+                                        `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
+                                        `🏦 *Payment Account Details (Kora Bank Transfer):*\n` +
+                                        `• Bank: *${vAcc.bankName}*\n` +
+                                        `• Account Number: *${vAcc.accountNumber}*\n` +
+                                        `• Account Name: *${vAcc.accountName}*\n\n` +
+                                        `👉 Please transfer ₦${data.price.toLocaleString()} to the account above. Your payment will be verified automatically in 1-2 minutes! ✨`
+                                });
+                            } catch (err) {
+                                console.error("❌ Korapay account generation error, falling back to static:", err.message);
+                                const orderRefNumber = `NX-${Date.now().toString().slice(-6)}`;
+                                
+                                await Order.create({
+                                    vendorPhone: cleanVendorPhone,
+                                    customerPhone: cleanRemoteJidNumber,
+                                    productName: data.productName,
+                                    amount: data.price,
+                                    paymentPolicy: paymentPolicy,
+                                    virtualAccountNumber: orderRefNumber,
+                                    status: 'PENDING'
+                                });
+
+                                await safeSendMessage(vendorSock, remoteJid, {
+                                    text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
+                                        `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
+                                        `🏦 *Payment Account Details:*\n` +
+                                        `Bank & Account: *${vendorBank}* (Manual Transfer)\n` +
+                                        `Order Ref: *${orderRefNumber}*\n\n` +
+                                        `👉 Please make payment to the account above and reply by sending *PAID* or sharing your receipt! ✨\n` +
+                                        `*(Note: The vendor will verify your transfer and confirm your order).*`
+                                });
+                            }
                         }
                     } catch (e) {
                         console.error("❌ Checkout Processing Error:", e.message, e.stack);
@@ -1175,7 +1245,10 @@ async function startNaxrMasterAgent(isReconnect = false) {
                     continue;
                 }
 
-                if (!session) continue;
+                if (!session) {
+                    await sock.sendMessage(remoteJid, { text: `👋 Hi there! Are you looking to automate sales & booking for your business with Naxr AI?\n\n👉 Reply *"REGISTER"* or *"YES"* to set up your AI store agent in 2 minutes! ✨` });
+                    continue;
+                }
                 session.updatedAt = new Date();
 
                 if (!textMessage && !isImage) {
@@ -1429,6 +1502,64 @@ app.post('/webhook/flutterwave', express.raw({ type: 'application/json' }), asyn
         }
     } catch (e) {
         console.error("Webhook Error:", e.message);
+    }
+});
+
+// ----------------------------------------------------
+// 6.5. KORAPAY WEBHOOK
+// ----------------------------------------------------
+app.post('/webhook/korapay', express.raw({ type: 'application/json' }), async (req, res) => {
+    res.sendStatus(200);
+
+    try {
+        const signature = req.headers['x-kora-signature'];
+        const secretKey = process.env.KORAPAY_SECRET_KEY;
+
+        if (!signature || !secretKey) {
+            console.error("❌ Missing Korapay signature or secret key");
+            return;
+        }
+
+        // Verify signature
+        const hmac = crypto.createHmac('sha256', secretKey);
+        hmac.update(req.body);
+        const computedSignature = hmac.digest('hex');
+
+        if (computedSignature !== signature) {
+            console.error("❌ Invalid Korapay webhook signature");
+            return;
+        }
+
+        const payload = JSON.parse(req.body.toString());
+        const eventType = payload.event;
+        if (eventType !== 'charge.success') return;
+
+        const data = payload.data;
+        const txRef = data.reference;
+
+        if (!txRef?.startsWith('BOT-')) return;
+
+        const paidAmount = data.amount;
+
+        const order = await Order.findOne({ txRef: txRef, status: 'PENDING' });
+
+        if (order && paidAmount >= order.amount * 0.95) {
+            order.status = 'PAID';
+            await order.save();
+
+            const vSock = vendorSockets[order.vendorPhone];
+            if (vSock) {
+                await vSock.sendMessage(`${order.customerPhone}@s.whatsapp.net`, {
+                    text: `✅ *PAYMENT CONFIRMED!*\n\nYour payment of ₦${paidAmount.toLocaleString()} has been received. Your order for *${order.productName}* is confirmed! 🎉`
+                });
+
+                await vSock.sendMessage(`${order.vendorPhone}@s.whatsapp.net`, {
+                    text: `💰 *NEW PAID ORDER!*\n\nItem: ${order.productName}\nAmount: ₦${paidAmount.toLocaleString()}\nCustomer: +${order.customerPhone}`
+                });
+            }
+        }
+    } catch (e) {
+        console.error("Korapay Webhook Error:", e.message);
     }
 });
 
