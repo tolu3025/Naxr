@@ -463,6 +463,37 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
     vendorSockets[cleanPhone] = vendorSock;
     vendorSock.ev.on('creds.update', saveCreds);
 
+    vendorSock.ev.on('messaging-history.set', async ({ chats, messages, contacts, isLatest }) => {
+        try {
+            console.log(`📥 Syncing WhatsApp chat history for ${cleanPhone} (${messages.length} messages)...Limit 50 to prevent overflow.`);
+            // Sync up to 50 recent messages to populate the inbox instantly without hitting rate limits
+            const sliceMsg = messages.slice(-50);
+            for (const msg of sliceMsg) {
+                if (!msg.message) continue;
+                const remoteJid = msg.key.remoteJid;
+                if (!remoteJid || remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter')) continue;
+                const cleanRemoteJidNumber = cleanPhoneNumber(remoteJid);
+                if (cleanRemoteJidNumber === cleanPhone) continue;
+                const textMessage = extractMessageText(msg);
+                if (!textMessage) continue;
+                const existing = await Message.findOne({ vendorPhone: cleanPhone, customerPhone: cleanRemoteJidNumber, text: textMessage });
+                if (!existing) {
+                    await Message.create({
+                        vendorPhone: cleanPhone,
+                        customerPhone: cleanRemoteJidNumber,
+                        text: textMessage,
+                        fromMe: !!msg.key.fromMe,
+                        isAi: false,
+                        timestamp: new Date((msg.messageTimestamp * 1000) || Date.now())
+                    });
+                }
+            }
+            console.log(`✅ Chat history sync complete for ${cleanPhone}!`);
+        } catch (e) {
+            console.error(`⚠️ History sync error for ${cleanPhone}:`, e.message);
+        }
+    });
+
     let pairingCode = null;
     if (!vendorSock.authState.creds.registered && requestNewCode) {
         await delay(3000);
@@ -561,22 +592,23 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 
                 const isVendorSelfChat = cleanRemoteJidNumber === cleanVendorPhone ||
                     remoteJid.includes(cleanVendorPhone) ||
-                    remoteJid.endsWith('@lid') ||
-                    msg.key.fromMe;
+                    remoteJid.endsWith('@lid');
+
+                const isFromMe = !!msg.key.fromMe;
 
                 if (!isVendorSelfChat) {
                     await Message.create({
                         vendorPhone: cleanVendorPhone,
                         customerPhone: cleanRemoteJidNumber,
                         text: textMessage || (isImage ? "[Image]" : "[Media]"),
-                        fromMe: false,
+                        fromMe: isFromMe,
                         isAi: false
                     });
                     if (typeof notifyVendorClients === 'function') {
                         notifyVendorClients(cleanVendorPhone, 'new_message', {
                             customer_phone: cleanRemoteJidNumber,
                             text: textMessage || (isImage ? "[Image]" : "[Media]"),
-                            fromMe: false,
+                            fromMe: isFromMe,
                             timestamp: new Date().toISOString()
                         });
                     }
