@@ -1,8 +1,10 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
 import '../stores/vendor_store.dart';
 import '../theme.dart';
 
@@ -52,8 +54,9 @@ class _ProductsTabState extends State<ProductsTab> {
   final TextEditingController _nameController = TextEditingController();
   final TextEditingController _priceController = TextEditingController();
   final TextEditingController _minPriceController = TextEditingController();
-  final TextEditingController _imageController = TextEditingController();
   bool _isNegotiable = false;
+  File? _pickedImageFile;
+  bool _isUploadingImage = false;
 
   @override
   void initState() {
@@ -66,7 +69,6 @@ class _ProductsTabState extends State<ProductsTab> {
     _nameController.dispose();
     _priceController.dispose();
     _minPriceController.dispose();
-    _imageController.dispose();
     super.dispose();
   }
 
@@ -90,39 +92,10 @@ class _ProductsTabState extends State<ProductsTab> {
           _products = data.map((json) => Product.fromJson(json)).toList();
         });
       } else {
-        throw Exception('Server error');
+        debugPrint('Fetch products failed: ${response.statusCode} ${response.body}');
       }
     } catch (e) {
-      debugPrint('Error fetching products, utilizing mock fallbacks: $e');
-      final mockProducts = [
-        Product(
-          id: '1',
-          name: 'Vintage Shirt',
-          price: 12000.0,
-          isNegotiable: true,
-          minPrice: 10000.0,
-          imageUrl: 'https://images.unsplash.com/photo-1596755094514-f87e34085b2c?w=200',
-        ),
-        Product(
-          id: '2',
-          name: 'Designer Sneakers',
-          price: 28000.0,
-          isNegotiable: false,
-          minPrice: 28000.0,
-          imageUrl: 'https://images.unsplash.com/photo-1549298916-b41d501d3772?w=200',
-        ),
-        Product(
-          id: '3',
-          name: 'Leather Handbag',
-          price: 18500.0,
-          isNegotiable: true,
-          minPrice: 16000.0,
-          imageUrl: 'https://images.unsplash.com/photo-1584917865442-de89df76afd3?w=200',
-        ),
-      ];
-      setState(() {
-        _products = mockProducts;
-      });
+      debugPrint('Error fetching products: $e');
     } finally {
       setState(() {
         _isLoading = false;
@@ -161,70 +134,82 @@ class _ProductsTabState extends State<ProductsTab> {
     }
   }
 
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    final picked = await picker.pickImage(source: ImageSource.gallery, imageQuality: 80);
+    if (picked != null) {
+      setState(() {
+        _pickedImageFile = File(picked.path);
+      });
+    }
+  }
+
   Future<void> _handleAddProduct() async {
     final name = _nameController.text.trim();
     final priceStr = _priceController.text.trim();
     final minPriceStr = _minPriceController.text.trim();
-    final imageUrl = _imageController.text.trim();
 
-    if (name.isEmpty || priceStr.isEmpty) return;
+    if (name.isEmpty || priceStr.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please enter product name and price'), backgroundColor: Colors.red),
+      );
+      return;
+    }
 
     final store = Provider.of<VendorStore>(context, listen: false);
     if (store.phone == null) return;
 
-    setState(() {
-      _isLoading = true;
-    });
+    setState(() => _isLoading = true);
 
     final double price = double.parse(priceStr);
     final double minPrice = minPriceStr.isNotEmpty ? double.parse(minPriceStr) : price;
 
     try {
-      // In Flutter we make a MultipartRequest for file uploads if local files are selected.
-      // But since we input URL, we can send a JSON payload or standard multipart.
-      // The React Native app used FormData for files. If url is supplied, we serialize it.
       final uri = Uri.parse('${VendorStore.baseUrl}/api/vendor/${store.phone}/products');
       final request = http.MultipartRequest('POST', uri);
       if (store.token != null) {
         request.headers['Authorization'] = 'Bearer ${store.token}';
       }
-      
+
       request.fields['name'] = name;
       request.fields['price'] = priceStr;
       request.fields['isNegotiable'] = _isNegotiable.toString();
       request.fields['minPrice'] = minPrice.toString();
-      
-      if (imageUrl.isNotEmpty) {
-        request.fields['imageUrl'] = imageUrl;
+
+      // Attach real image file if picked
+      if (_pickedImageFile != null) {
+        request.files.add(await http.MultipartFile.fromPath('image', _pickedImageFile!.path));
       }
 
       final response = await request.send();
+      final responseBody = await response.stream.bytesToString();
+
       if (response.statusCode == 200 || response.statusCode == 201) {
-        Navigator.of(context).pop();
+        if (mounted) Navigator.of(context).pop();
         _clearForm();
         _fetchProducts();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('✅ Product added successfully!'), backgroundColor: Colors.green),
+          );
+        }
       } else {
-        throw Exception('Server rejected request');
+        debugPrint('Server error: ${response.statusCode} $responseBody');
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to add product: $responseBody'), backgroundColor: Colors.red),
+          );
+        }
       }
     } catch (e) {
-      debugPrint('API add product failed, adding locally (mock mode): $e');
-      final mockNew = Product(
-        id: DateTime.now().millisecondsSinceEpoch.toString(),
-        name: name,
-        price: price,
-        isNegotiable: _isNegotiable,
-        minPrice: minPrice,
-        imageUrl: imageUrl.isNotEmpty ? imageUrl : 'https://images.unsplash.com/photo-1523381210434-271e8be1f52b?w=200',
-      );
-      setState(() {
-        _products.add(mockNew);
-      });
-      Navigator.of(context).pop();
-      _clearForm();
+      debugPrint('API add product failed: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.red),
+        );
+      }
     } finally {
-      setState(() {
-        _isLoading = false;
-      });
+      setState(() => _isLoading = false);
     }
   }
 
@@ -232,9 +217,9 @@ class _ProductsTabState extends State<ProductsTab> {
     _nameController.clear();
     _priceController.clear();
     _minPriceController.clear();
-    _imageController.clear();
     setState(() {
       _isNegotiable = false;
+      _pickedImageFile = null;
     });
   }
 
@@ -314,11 +299,32 @@ class _ProductsTabState extends State<ProductsTab> {
                       ),
                     ],
                     const SizedBox(height: 16),
-                    TextField(
-                      controller: _imageController,
-                      decoration: const InputDecoration(
-                        labelText: 'Image URL (optional)',
-                        hintText: 'https://...',
+                    // Image picker button
+                    GestureDetector(
+                      onTap: () async {
+                        await _pickImage();
+                        setModalState(() {});
+                      },
+                      child: Container(
+                        height: 120,
+                        decoration: BoxDecoration(
+                          color: Colors.grey.shade100,
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: Colors.grey.shade300, style: BorderStyle.solid),
+                        ),
+                        child: _pickedImageFile != null
+                            ? ClipRRect(
+                                borderRadius: BorderRadius.circular(12),
+                                child: Image.file(_pickedImageFile!, fit: BoxFit.cover, width: double.infinity),
+                              )
+                            : Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Icon(Icons.add_photo_alternate_outlined, size: 36, color: Colors.grey.shade400),
+                                  const SizedBox(height: 8),
+                                  Text('Tap to add product image', style: TextStyle(color: Colors.grey.shade500, fontSize: 13)),
+                                ],
+                              ),
                       ),
                     ),
                     const SizedBox(height: 24),
