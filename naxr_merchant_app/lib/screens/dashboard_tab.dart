@@ -134,7 +134,11 @@ class _DashboardTabState extends State<DashboardTab> {
                         children: [
                           IconButton(
                             icon: const Icon(Icons.notifications_none, size: 28),
-                            onPressed: () {},
+                            onPressed: () {
+                              if (widget.onSelectTab != null) {
+                                widget.onSelectTab!(1); // Go to Chats tab
+                              }
+                            },
                           ),
                           if (store.unreadMessages > 0)
                             Positioned(
