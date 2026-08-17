@@ -5,6 +5,7 @@ import 'dart:convert';
 import '../stores/vendor_store.dart';
 import '../theme.dart';
 import 'chat_detail_screen.dart';
+import 'package:intl/intl.dart';
 
 class ChatListItem {
   final String customerPhone;
@@ -309,43 +310,60 @@ class _ChatsTabState extends State<ChatsTab> {
             const SizedBox(width: 8),
 
             // Right: Time and AI status label
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                Text(
-                  item.lastMessageTime,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: AppTheme.textMuted,
-                  ),
-                ),
-                if (item.aiHandled) ...[
-                  const SizedBox(height: 6),
-                  Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.green.shade50,
-                      borderRadius: BorderRadius.circular(4),
+            // Right: Time and AI status label
+            (() {
+              String displayTime = item.lastMessageTime;
+              try {
+                final parsed = DateTime.parse(displayTime).toLocal();
+                final now = DateTime.now();
+                final difference = now.difference(parsed).inDays;
+                if (difference == 0 && now.day == parsed.day) {
+                  displayTime = DateFormat('h:mm a').format(parsed);
+                } else if (difference <= 1 && now.subtract(const Duration(days: 1)).day == parsed.day) {
+                  displayTime = 'Yesterday';
+                } else {
+                  displayTime = DateFormat('dd/MM/yy').format(parsed);
+                }
+              } catch (_) {}
+
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text(
+                    displayTime,
+                    style: const TextStyle(
+                      fontSize: 11,
+                      color: AppTheme.textMuted,
                     ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const Icon(Icons.android, size: 12, color: AppTheme.whatsappGreen),
-                        const SizedBox(width: 2),
-                        Text(
-                          'AI',
-                          style: TextStyle(
-                            fontSize: 9,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.green.shade700,
+                  ),
+                  if (item.aiHandled) ...[
+                    const SizedBox(height: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.green.shade50,
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          const Icon(Icons.android, size: 12, color: AppTheme.whatsappGreen),
+                          const SizedBox(width: 2),
+                          Text(
+                            'AI',
+                            style: TextStyle(
+                              fontSize: 9,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.green.shade700,
+                            ),
                           ),
-                        ),
-                      ],
+                        ],
+                      ),
                     ),
-                  ),
+                  ],
                 ],
-              ],
-            ),
+              );
+            })(),
           ],
         ),
       ),
