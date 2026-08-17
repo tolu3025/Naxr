@@ -1,4 +1,4 @@
-﻿require('dotenv').config();
+require('dotenv').config();
 const {
     default: makeWASocket,
     initAuthCreds,
@@ -1997,7 +1997,7 @@ app.get('/api/vendor/:phone/pair-code', checkAuth, async (req, res) => {
             delete vendorSockets[phone];
             await delay(1500);
         }
-        await Auth.deleteMany({ _id: { $regex: "^vendor_" } });
+        await Auth.deleteMany({ _id: { $regex: `^vendor_${phone}` } });
 
         const code = await spawnVendorAgent(phone, vendor.storeName, true);
         if (code && code !== "ERROR") {
