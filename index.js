@@ -1760,6 +1760,10 @@ app.get('/api/admin/reset-session', async (req, res) => {
 });
 
 app.get('/api/admin/check-env', async (req, res) => {
+    let gitCommit = "N/A";
+    try {
+        gitCommit = require('child_process').execSync('git rev-parse HEAD').toString().trim();
+    } catch (e) {}
     return res.json({
         has_mongodb_uri: !!process.env.MONGODB_URI,
         has_openai_key: !!process.env.OPENAI_API_KEY,
@@ -1769,7 +1773,8 @@ app.get('/api/admin/check-env', async (req, res) => {
         has_korapay_secret: !!process.env.KORAPAY_SECRET_KEY,
         has_admin_phone: !!process.env.ADMIN_PHONE,
         admin_phone: process.env.ADMIN_PHONE,
-        port: process.env.PORT
+        port: process.env.PORT,
+        git_commit: gitCommit
     });
 });
 // Portal Authentication Routes
