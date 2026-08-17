@@ -13,12 +13,14 @@ class VendorStore extends ChangeNotifier {
   bool _isConnected = false;
   bool _isPro = false;
   int _unreadMessages = 0;
+  int _chatRefreshCount = 0; // incremented to signal ChatsTab to reload
   Map<String, double> _revenue = {'today': 0, 'week': 0, 'month': 0};
 
   bool _allowNegotiation = false;
   int _maxDiscountPercent = 0;
 
   String? get phone => _phone;
+  int get chatRefreshCount => _chatRefreshCount;
   String get businessName => _businessName;
   String get responseMode => _responseMode;
   bool get isConnected => _isConnected;
@@ -51,6 +53,13 @@ class VendorStore extends ChangeNotifier {
 
   void setConnected(bool connected) {
     _isConnected = connected;
+    notifyListeners();
+  }
+
+  /// Call this whenever a new WhatsApp message arrives via socket.
+  /// ChatsTab listens to [chatRefreshCount] via Consumer and will reload.
+  void triggerChatRefresh() {
+    _chatRefreshCount++;
     notifyListeners();
   }
 

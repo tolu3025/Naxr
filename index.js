@@ -204,7 +204,7 @@ async function lookupBankCode(bankNameRaw) {
         const bank = banks.find(b => b.name.toLowerCase().includes(bankNameRaw.toLowerCase().trim())) || banks[0];
         return bank ? bank.code : null;
     } catch (error) {
-        console.error("Ã¢Å¡Â Ã¯Â¸Â Korapay Bank Code Error (non-fatal):", error?.response?.data || error.message);
+        console.error("⚠️ Korapay Bank Code Error (non-fatal):", error?.response?.data || error.message);
         return null;
     }
 }
@@ -243,7 +243,7 @@ async function createKorapayVirtualAccount(customerPhone, amount, productName) {
             throw new Error(response.data.message || "Failed to generate virtual account");
         }
     } catch (error) {
-        console.error("Ã¢Å¡Â Ã¯Â¸Â Korapay Virtual Account Error:", error?.response?.data || error.message);
+        console.error("⚠️ Korapay Virtual Account Error:", error?.response?.data || error.message);
         throw new Error("Failed to create virtual account. Please verify your Korapay keys.");
     }
 }
@@ -324,7 +324,7 @@ async function safeSendMessage(sock, jid, content, options = {}) {
             await delay(500);
             return sent;
         } catch (err) {
-            console.error("Ã¢ÂÅ’ safeSendMessage Error:", err.message);
+            console.error("❌ safeSendMessage Error:", err.message);
             return null;
         }
     });
@@ -365,42 +365,42 @@ function getStepPrompt(step, session = {}) {
     const storeName = session.storeName || "";
     switch (step) {
         case 1: 
-            return "Ã°Å¸â€œÂ *Step 1/8:* What is your Business / Store Name? ✨";
+            return "📝 *Step 1/8:* What is your Business / Store Name? ✨";
         case 2: 
-            return `Store Name saved: *${storeName}* ✅\n\nÃ°Å¸ÂÂ·Ã¯Â¸Â *Step 2/8:* What category is your business?\n\n` +
+            return `Store Name saved: *${storeName}* ✅\n\n🏷️ *Step 2/8:* What category is your business?\n\n` +
                    `Reply with one of the numbers below:\n` +
-                   `1Ã¯Â¸ÂÃ¢Æ’Â£ *Retail & Products* (Fashion, Electronics, Food, General Goods)\n` +
-                   `2Ã¯Â¸ÂÃ¢Æ’Â£ *Custom / Bespoke* (Custom Cakes, Tailoring, Handcrafted, Wholesale)\n` +
-                   `3Ã¯Â¸ÂÃ¢Æ’Â£ *Services & Transport* (Campus Shuttle, Taxi, Logistics, Barber, Consultations)`;
+                   `1️⃣ *Retail & Products* (Fashion, Electronics, Food, General Goods)\n` +
+                   `2️⃣ *Custom / Bespoke* (Custom Cakes, Tailoring, Handcrafted, Wholesale)\n` +
+                   `3️⃣ *Services & Transport* (Campus Shuttle, Taxi, Logistics, Barber, Consultations)`;
         case 3: 
-            return "Ã°Å¸â€œâ€“ *Step 3/8:* Give a short description of what your business does. Ã°Å¸â€™Â¡";
+            return "📖 *Step 3/8:* Give a short description of what your business does. 💡";
         case 4:
             if (session.businessType === 'CUSTOM') {
-                return "Ã°Å¸Â¤Â *Step 4/8:* Do you allow AI price negotiations with buyers?\n\n" +
+                return "🤝 *Step 4/8:* Do you allow AI price negotiations with buyers?\n\n" +
                        "Reply with *NO* for fixed prices, or reply with the **Max Discount %** allowed (e.g. *15%* to allow up to 15% discount).";
             } else if (session.businessType === 'SERVICE_TRANSPORT') {
-                return "Ã°Å¸â€™Â³ *Step 4/8:* How should customers pay for your service/transport?\n\n" +
+                return "💳 *Step 4/8:* How should customers pay for your service/transport?\n\n" +
                        "Reply with:\n" +
-                       "1Ã¯Â¸ÂÃ¢Æ’Â£ *PAY_ON_BOARD* (Students/clients pay cash/transfer upon boarding/service)\n" +
-                       "2Ã¯Â¸ÂÃ¢Æ’Â£ *UPFRONT* (Payment required before booking confirmation)\n" +
-                       "3Ã¯Â¸ÂÃ¢Æ’Â£ *FLEXIBLE* (Both allowed)";
+                       "1️⃣ *PAY_ON_BOARD* (Students/clients pay cash/transfer upon boarding/service)\n" +
+                       "2️⃣ *UPFRONT* (Payment required before booking confirmation)\n" +
+                       "3️⃣ *FLEXIBLE* (Both allowed)";
             } else {
-                return "Ã°Å¸â€œÂ± *Step 5/8:* Enter your **WhatsApp Phone Number** for linking your AI (e.g., 2348027986674). Ã°Å¸â€œÅ¾";
+                return "📱 *Step 5/8:* Enter your **WhatsApp Phone Number** for linking your AI (e.g., 2348027986674). 📞";
             }
         case 5: 
-            return "Ã°Å¸â€œÂ± *Step 5/8:* Enter your **WhatsApp Phone Number** for linking your AI (e.g., 2348027986674). Ã°Å¸â€œÅ¾";
+            return "📱 *Step 5/8:* Enter your **WhatsApp Phone Number** for linking your AI (e.g., 2348027986674). 📞";
         case 6: 
-            return "Ã°Å¸â€™Â³ *Step 6/8:* Provide your Bank Name and Account Number (e.g. *Opay - 8148698365*).\n\n" +
-                   "_(Note: If your business doesn't collect online payments, reply *SKIP*)._ Ã°Å¸ÂÂ¦";
+            return "💳 *Step 6/8:* Provide your Bank Name and Account Number (e.g. *Opay - 8148698365*).\n\n" +
+                   "_(Note: If your business doesn't collect online payments, reply *SKIP*)._ 🏦";
         case 7: 
-            return "Ã°Å¸Å¡Å¡ *Step 7/8:* How do you handle delivery/pickup? (e.g. *Same day in Campus*, *Pickup at Garage*, *Nationwide GIGM*). 📦";
+            return "🚚 *Step 7/8:* How do you handle delivery/pickup? (e.g. *Same day in Campus*, *Pickup at Garage*, *Nationwide GIGM*). 📦";
         case 8: 
             if (session.businessType === 'SERVICE_TRANSPORT') {
-                return "Ã°Å¸Å¡â€¢ *Step 8/8:* List your routes or services with prices!\n\n" +
+                return "🚕 *Step 8/8:* List your routes or services with prices!\n\n" +
                        "Reply with text like:\n`Main Gate to Hostels - 200`\n`Campus Shuttle Daily Pass - 1000`\n\n" +
                        "Reply *DONE* when finished listing! ✨";
             } else {
-                return "Ã°Å¸â€œÂ¸ *Step 8/8:* Add your products or services!\n\n" +
+                return "📸 *Step 8/8:* Add your products or services!\n\n" +
                        "You can send product photos with captions (e.g. `Vintage Shirt - 12000`), or text only.\n\n" +
                        "When done, reply with *DONE*. ✨";
             }
@@ -499,7 +499,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
         await delay(3000);
         try {
             pairingCode = await vendorSock.requestPairingCode(cleanPhone);
-            console.log(`\nÃ°Å¸â€â€˜ VALID VENDOR PAIRING CODE FOR ${storeName} (${cleanPhone}): ${pairingCode}\n`);
+            console.log(`\n🔑 VALID VENDOR PAIRING CODE FOR ${storeName} (${cleanPhone}): ${pairingCode}\n`);
         } catch (err) { pairingCode = "ERROR"; }
     } else if (vendorSock.authState.creds.registered) {
         pairingCode = "ALREADY_ACTIVE";
@@ -518,23 +518,23 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                 if (vendorData && !vendorData.docsSent) {
                     const docsMessage = `🎉 *CONGRATULATIONS! YOUR NAXR AI AGENT IS NOW LIVE!* 🚀\n\n` +
                         `Your 7-Day Free Trial has officially started! Naxr AI is managing sales for *${storeName}*.\n\n` +
-                        `Ã°Å¸â€â€™ *PRIVACY & SECURITY GUARANTEE*\n` +
+                        `🔒 *PRIVACY & SECURITY GUARANTEE*\n` +
                         `Your WhatsApp is completely safe. Naxr AI operates under strict privacy rules. We do NOT read your personal chats. The AI ONLY wakes up when a customer explicitly uses "buying intent" words. Your privacy is 100% protected.\n\n` +
-                        `Ã°Å¸â€œâ€“ *QUICK OPERATIONAL GUIDE*\n` +
-                        `Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬\n` +
-                        `1Ã¯Â¸ÂÃ¢Æ’Â£ *Automated Catalog:* Customers can ask for your catalog, and the AI will auto-send your product pictures and prices.\n` +
-                        `2Ã¯Â¸ÂÃ¢Æ’Â£ *Virtual Accounts (Anti-Fraud):* Instead of links, Naxr generates a direct **Virtual Bank Account** for every transaction. Fake screenshots won't work anymoreÃ¢â‚¬â€the AI verifies payments instantly via Flutterwave and wires the money to you!\n\n` +
-                        `🛍️ Ã¯Â¸Â *MANAGE YOUR STORE DIRECTLY HERE*\n` +
+                        `📖 *QUICK OPERATIONAL GUIDE*\n` +
+                        `────────────────────────────\n` +
+                        `1️⃣ *Automated Catalog:* Customers can ask for your catalog, and the AI will auto-send your product pictures and prices.\n` +
+                        `2️⃣ *Virtual Accounts (Anti-Fraud):* Instead of links, Naxr generates a direct **Virtual Bank Account** for every transaction. Fake screenshots won't work anymore—the AI verifies payments instantly via Flutterwave and wires the money to you!\n\n` +
+                        `🛍️ ️ *MANAGE YOUR STORE DIRECTLY HERE*\n` +
                         `Message yourself (this chat) with these commands:\n` +
-                        `Ã¢â‚¬Â¢ *stats* - View your total sales.\n` +
-                        `Ã¢â‚¬Â¢ *analytics* - Detailed breakdown of orders & revenue.\n` +
-                        `Ã¢â‚¬Â¢ *products* - See your current list of items.\n` +
-                        `Ã¢â‚¬Â¢ *ai off* / *ai on* - Toggle the AI agent.\n` +
-                        `Ã¢â‚¬Â¢ *edit description [new text]* - Update your business info.\n` +
-                        `Ã¢â‚¬Â¢ *delete product [name]* - Remove an item.\n` +
-                        `Ã¢â‚¬Â¢ *confirm test* - Manually confirm a test payment (test mode only).\n` +
-                        `Ã¢â‚¬Â¢ *Add new item:* Simply send a picture of the product to this chat and write the price and name in the caption!\n\n` +
-                        `✨ *You are now ready to scale your business on autopilot!* Ã°Å¸Â¥â€š`;
+                        `• *stats* - View your total sales.\n` +
+                        `• *analytics* - Detailed breakdown of orders & revenue.\n` +
+                        `• *products* - See your current list of items.\n` +
+                        `• *ai off* / *ai on* - Toggle the AI agent.\n` +
+                        `• *edit description [new text]* - Update your business info.\n` +
+                        `• *delete product [name]* - Remove an item.\n` +
+                        `• *confirm test* - Manually confirm a test payment (test mode only).\n` +
+                        `• *Add new item:* Simply send a picture of the product to this chat and write the price and name in the caption!\n\n` +
+                        `✨ *You are now ready to scale your business on autopilot!* 🥂`;
 
                     await vendorSock.sendMessage(`${cleanPhone}@s.whatsapp.net`, { text: docsMessage });
                     vendorData.docsSent = true;
@@ -627,21 +627,21 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     if (vendorData) {
                         const daysActive = (Date.now() - new Date(vendorData.createdAt).getTime()) / (1000 * 60 * 60 * 24);
                         if (daysActive > 7 && !vendorData.isPro) {
-                            const trialExpiredMessage = `Ã¢Å¡Â Ã¯Â¸Â *TRIAL EXPIRED:* Your 7-day Naxr AI trial has ended. Your bot is currently paused.\n\n` +
+                            const trialExpiredMessage = `⚠️ *TRIAL EXPIRED:* Your 7-day Naxr AI trial has ended. Your bot is currently paused.\n\n` +
                                 `To renew your subscription and keep automated sales running, please make payment to:\n\n` +
-                                `Ã°Å¸ÂÂ¦ *Bank:* Kuda Microfinance Bank\n` +
-                                `Ã°Å¸â€Â¢ *Account Number:* 3003853004\n` +
-                                `Ã°Å¸â€˜Â¤ *Account Name:* KUKA TECHNOLOGY AND INNOVATION LIMITED\n\n` +
+                                `🏦 *Bank:* Kuda Microfinance Bank\n` +
+                                `🔢 *Account Number:* 3003853004\n` +
+                                `👤 *Account Name:* KUKA TECHNOLOGY AND INNOVATION LIMITED\n\n` +
                                 `👉 *After payment, simply send the transaction receipt screenshot to this chat.* Our system will verify the receipt and automatically reactivate your service! 🚀`;
                             await safeSendMessage(vendorSock, remoteJid, { text: trialExpiredMessage });
                             continue;
                         }
                     }
 
-                    // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ VENDOR SELF-CHAT ADMIN CONTROLS Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+                    // ─── VENDOR SELF-CHAT ADMIN CONTROLS ───
                     if (lowerText === 'ai off') {
                         await Vendor.findOneAndUpdate({ phoneNumber: cleanVendorPhone }, { aiActive: false });
-                        await safeSendMessage(vendorSock, remoteJid, { text: `Ã°Å¸â€ºâ€˜ *AI Agent is now OFF.*\n\nCustomers will no longer receive automated replies until you turn it back on.` });
+                        await safeSendMessage(vendorSock, remoteJid, { text: `🛑 *AI Agent is now OFF.*\n\nCustomers will no longer receive automated replies until you turn it back on.` });
                         continue;
                     }
                     if (lowerText === 'ai on') {
@@ -661,14 +661,14 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         ]);
                         const revenue = totalRevenue[0]?.total || 0;
 
-                        let trialText = vendorData?.isPro ? "✅ Pro Plan Active" : `Ã¢ÂÂ³ Free Trial: ${Math.max(7 - Math.floor((Date.now() - new Date(vendorData.createdAt).getTime()) / (1000 * 60 * 60 * 24)), 0)} days left`;
-                        let aiStatus = vendorData?.aiActive !== false ? "Ã°Å¸Å¸Â¢ AI ON" : "Ã°Å¸â€Â´ AI OFF";
+                        let trialText = vendorData?.isPro ? "✅ Pro Plan Active" : `⏳ Free Trial: ${Math.max(7 - Math.floor((Date.now() - new Date(vendorData.createdAt).getTime()) / (1000 * 60 * 60 * 24)), 0)} days left`;
+                        let aiStatus = vendorData?.aiActive !== false ? "🟢 AI ON" : "🔴 AI OFF";
 
                         await safeSendMessage(vendorSock, remoteJid, {
-                            text: `Ã°Å¸â€œÅ  *${storeName} Admin Dashboard*\n\n` +
-                                `🛍️Ã¯Â¸Â Active Products: ${productsCount}\n` +
+                            text: `📊 *${storeName} Admin Dashboard*\n\n` +
+                                `🛍️️ Active Products: ${productsCount}\n` +
                                 `✅ Confirmed Paid Sales: ${salesCount}\n` +
-                                `Ã¢ÂÂ³ Pending Orders: ${pendingCount}\n` +
+                                `⏳ Pending Orders: ${pendingCount}\n` +
                                 `💰 Total Revenue: ₦${revenue.toLocaleString()}\n\n` +
                                 `${trialText}\n${aiStatus}`
                         });
@@ -686,15 +686,15 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         const revenue = totalRevenue[0]?.total || 0;
 
                         const recentPaid = paidOrders.length > 0
-                            ? paidOrders.map(o => `Ã¢â‚¬Â¢ ${o.productName} Ã¢â‚¬â€ ₦${o.amount.toLocaleString()} (+${o.customerPhone})`).join('\n')
+                            ? paidOrders.map(o => `• ${o.productName} — ₦${o.amount.toLocaleString()} (+${o.customerPhone})`).join('\n')
                             : "No paid orders yet.";
 
                         const recentPending = pendingOrders.length > 0
-                            ? pendingOrders.map(o => `Ã¢â‚¬Â¢ ${o.productName} Ã¢â‚¬â€ ₦${o.amount.toLocaleString()} (Ref: ${o.virtualAccountNumber})`).join('\n')
+                            ? pendingOrders.map(o => `• ${o.productName} — ₦${o.amount.toLocaleString()} (Ref: ${o.virtualAccountNumber})`).join('\n')
                             : "No pending orders.";
 
                         await safeSendMessage(vendorSock, remoteJid, {
-                            text: `Ã°Å¸â€œË† *Analytics for ${storeName}*\n\n` +
+                            text: `📈 *Analytics for ${storeName}*\n\n` +
                                 `*Revenue:* ₦${revenue.toLocaleString()}\n\n` +
                                 `*Recent Paid Orders:*\n${recentPaid}\n\n` +
                                 `*Pending Orders:*\n${recentPending}\n\n` +
@@ -713,13 +713,13 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                                     try {
                                         await safeSendMessage(vendorSock, remoteJid, {
                                             image: { url: p.imageUrl },
-                                            caption: `🛍️Ã¯Â¸Â *${p.name}*\n💰 Price: ₦${p.price.toLocaleString()}`
+                                            caption: `🛍️️ *${p.name}*\n💰 Price: ₦${p.price.toLocaleString()}`
                                         });
                                     } catch (e) {
-                                        await safeSendMessage(vendorSock, remoteJid, { text: `🛍️Ã¯Â¸Â *${p.name}*\n💰 Price: ₦${p.price.toLocaleString()}` });
+                                        await safeSendMessage(vendorSock, remoteJid, { text: `🛍️️ *${p.name}*\n💰 Price: ₦${p.price.toLocaleString()}` });
                                     }
                                 } else {
-                                    await safeSendMessage(vendorSock, remoteJid, { text: `🛍️Ã¯Â¸Â *${p.name}*\n💰 Price: ₦${p.price.toLocaleString()}` });
+                                    await safeSendMessage(vendorSock, remoteJid, { text: `🛍️️ *${p.name}*\n💰 Price: ₦${p.price.toLocaleString()}` });
                                 }
                             }
                         } else {
@@ -741,7 +741,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         const prodName = textMessage.substring(15).trim();
                         const res = await Product.deleteOne({ vendorPhone: cleanVendorPhone, name: { $regex: new RegExp(prodName, 'i') } });
                         if (res.deletedCount > 0) await safeSendMessage(vendorSock, remoteJid, { text: `✅ Product "${prodName}" deleted.` });
-                        else await safeSendMessage(vendorSock, remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â Product not found.` });
+                        else await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ Product not found.` });
                         continue;
                     }
 
@@ -749,7 +749,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     if (lowerText === 'confirm test' || lowerText === 'test confirm') {
                         const pendingOrder = await Order.findOne({ vendorPhone: cleanVendorPhone, status: 'PENDING' }).sort({ createdAt: -1 });
                         if (!pendingOrder) {
-                            await safeSendMessage(vendorSock, remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â No pending orders found.` });
+                            await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ No pending orders found.` });
                             continue;
                         }
                         pendingOrder.status = 'PAID';
@@ -771,7 +771,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                             // Vendor adding new item
                             const price = parseInt(match[0]);
                             const name = textMessage.replace(match[0], '').replace(/[#₦$-]/g, '').trim() || "Unnamed Item";
-                            await safeSendMessage(vendorSock, remoteJid, { react: { text: "Ã¢ÂÂ³", key: msg.key } });
+                            await safeSendMessage(vendorSock, remoteJid, { react: { text: "⏳", key: msg.key } });
                             const buffer = await downloadMediaMessage(msg, 'buffer', {});
                             const imageUrl = await uploadToCloudinary(buffer);
                             await Product.create({ vendorPhone: cleanVendorPhone, name, price, imageUrl });
@@ -779,7 +779,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         } else {
                             // Evaluate as a subscription receipt upload
                             try {
-                                await safeSendMessage(vendorSock, remoteJid, { react: { text: "Ã¢ÂÂ³", key: msg.key } });
+                                await safeSendMessage(vendorSock, remoteJid, { react: { text: "⏳", key: msg.key } });
                                 const buffer = await downloadMediaMessage(msg, 'buffer', {});
                                 const base64Image = buffer.toString('base64');
 
@@ -819,32 +819,32 @@ Reply in JSON format only: {"isSubscriptionReceipt": true/false, "isSuspicious":
                                     // Notify Admin of new activation
                                     if (globalSock) {
                                         await safeSendMessage(globalSock, `${ADMIN_PHONE}@s.whatsapp.net`, {
-                                            text: `Ã°Å¸â€˜â€˜ *NEW SUBSCRIPTION ACTIVATED!*\n\nVendor: ${storeName} (${cleanVendorPhone})\nReceipt Status: Verified by AI (${analysis.confidence} confidence).\nReason: ${analysis.reason}`
+                                            text: `👑 *NEW SUBSCRIPTION ACTIVATED!*\n\nVendor: ${storeName} (${cleanVendorPhone})\nReceipt Status: Verified by AI (${analysis.confidence} confidence).\nReason: ${analysis.reason}`
                                         });
                                         await safeSendMessage(globalSock, `${ADMIN_PHONE}@s.whatsapp.net`, {
                                             image: buffer,
-                                            caption: `Ã°Å¸â€œâ€ž Subscription Receipt for ${storeName} (${cleanVendorPhone})`
+                                            caption: `📄 Subscription Receipt for ${storeName} (${cleanVendorPhone})`
                                         });
                                     }
                                 } else {
-                                    await safeSendMessage(vendorSock, remoteJid, { react: { text: "Ã¢ÂÅ’", key: msg.key } });
+                                    await safeSendMessage(vendorSock, remoteJid, { react: { text: "❌", key: msg.key } });
                                     await safeSendMessage(vendorSock, remoteJid, { 
-                                        text: `Ã¢Å¡Â Ã¯Â¸Â *RECEIPT VERIFICATION FAILED:*\n\nReason: ${analysis.reason}\n\nIf you believe this is an error, please contact support for manual activation.` 
+                                        text: `⚠️ *RECEIPT VERIFICATION FAILED:*\n\nReason: ${analysis.reason}\n\nIf you believe this is an error, please contact support for manual activation.` 
                                     });
                                     
                                     // Alert admin of failed receipt upload
                                     if (globalSock) {
                                         await safeSendMessage(globalSock, `${ADMIN_PHONE}@s.whatsapp.net`, {
-                                            text: `Ã¢Å¡Â Ã¯Â¸Â *FAILED/SUSPICIOUS SUBSCRIPTION RECEIPT DETECTED!*\n\nVendor: ${storeName} (${cleanVendorPhone})\nAI Review: ${analysis.reason}`
+                                            text: `⚠️ *FAILED/SUSPICIOUS SUBSCRIPTION RECEIPT DETECTED!*\n\nVendor: ${storeName} (${cleanVendorPhone})\nAI Review: ${analysis.reason}`
                                         });
                                         await safeSendMessage(globalSock, `${ADMIN_PHONE}@s.whatsapp.net`, {
                                             image: buffer,
-                                            caption: `Ã°Å¸â€œâ€ž Failed Subscription Receipt for ${storeName} (${cleanVendorPhone})`
+                                            caption: `📄 Failed Subscription Receipt for ${storeName} (${cleanVendorPhone})`
                                         });
                                     }
                                 }
                             } catch (err) {
-                                await safeSendMessage(vendorSock, remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â Could not verify receipt at this time: ${err.message}` });
+                                await safeSendMessage(vendorSock, remoteJid, { text: `⚠️ Could not verify receipt at this time: ${err.message}` });
                             }
                         }
                         continue;
@@ -853,15 +853,15 @@ Reply in JSON format only: {"isSubscriptionReceipt": true/false, "isSuspicious":
                     // HELP
                     if (lowerText === 'help') {
                         await safeSendMessage(vendorSock, remoteJid, {
-                            text: `Ã°Å¸â€™Â¡ *Naxr Vendor Commands:*\n` +
-                                `Ã¢â‚¬Â¢ *stats* Ã¢â‚¬â€ Quick sales summary\n` +
-                                `Ã¢â‚¬Â¢ *analytics* Ã¢â‚¬â€ Detailed breakdown\n` +
-                                `Ã¢â‚¬Â¢ *products* Ã¢â‚¬â€ View catalog\n` +
-                                `Ã¢â‚¬Â¢ *ai on* / *ai off* Ã¢â‚¬â€ Toggle AI\n` +
-                                `Ã¢â‚¬Â¢ *edit description [text]*\n` +
-                                `Ã¢â‚¬Â¢ *delete product [name]*\n` +
-                                `Ã¢â‚¬Â¢ *confirm test* Ã¢â‚¬â€ Confirm pending order\n` +
-                                `Ã¢â‚¬Â¢ Send image + price to add product`
+                            text: `💡 *Naxr Vendor Commands:*\n` +
+                                `• *stats* — Quick sales summary\n` +
+                                `• *analytics* — Detailed breakdown\n` +
+                                `• *products* — View catalog\n` +
+                                `• *ai on* / *ai off* — Toggle AI\n` +
+                                `• *edit description [text]*\n` +
+                                `• *delete product [name]*\n` +
+                                `• *confirm test* — Confirm pending order\n` +
+                                `• Send image + price to add product`
                         });
                         continue;
                     }
@@ -870,7 +870,7 @@ Reply in JSON format only: {"isSubscriptionReceipt": true/false, "isSuspicious":
                     continue;
                 }
 
-                // Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬ CUSTOMER-FACING AI Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+                // ─── CUSTOMER-FACING AI ───
                 if (msg.key.fromMe) continue;
                 if (!vendorData || vendorData.aiActive === false) continue;
 
@@ -886,7 +886,7 @@ Reply in JSON format only: {"isSubscriptionReceipt": true/false, "isSuspicious":
 
                     if (isImage) {
                         try {
-                            await safeSendMessage(vendorSock, remoteJid, { react: { text: "Ã¢ÂÂ³", key: msg.key } });
+                            await safeSendMessage(vendorSock, remoteJid, { react: { text: "⏳", key: msg.key } });
                             const buffer = await downloadMediaMessage(msg, 'buffer', {});
                             const base64Image = buffer.toString('base64');
 
@@ -922,7 +922,7 @@ Reply in JSON format only: {"isReceipt": true/false, "isSuspicious": true/false,
                             } else {
                                 isVisionFlaggedSuspicious = true;
                                 receiptVerificationInfo = `🚨 SUSPICIOUS/FLAGGED: ${analysis.reason}`;
-                                await safeSendMessage(vendorSock, remoteJid, { react: { text: "Ã¢Å¡Â Ã¯Â¸Â", key: msg.key } });
+                                await safeSendMessage(vendorSock, remoteJid, { react: { text: "⚠️", key: msg.key } });
                             }
                         } catch (err) {
                             receiptVerificationInfo = `Could not analyze image: ${err.message}`;
@@ -932,14 +932,14 @@ Reply in JSON format only: {"isReceipt": true/false, "isSuspicious": true/false,
                     // Generate a confirmation receipt response
                     const receiptNumber = `REC-${Date.now().toString().slice(-6)}`;
                     const receiptText = `🧾 *NAXR TRANSACTION RECEIPT*\n` +
-                        `Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬\n` +
+                        `────────────────────────────\n` +
                         `Receipt No: *${receiptNumber}*\n` +
                         `Product: *${pendingOrder.productName}*\n` +
                         `Amount: *₦${pendingOrder.amount.toLocaleString()}*\n` +
                         `Customer: *+${cleanRemoteJidNumber}*\n` +
                         `Status: *AWAITING SELLER CONFIRMATION*\n` +
-                        `Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬\n\n` +
-                        `Ã¢Å¡Â Ã¯Â¸  *Please Note:* This receipt is an automated proof that you submitted your payment. It does *NOT* mean your order is automatically confirmed. The vendor must manually verify the transfer in their bank app before shipping. Thank you for your patience! Ã°Å¸â„¢ `;
+                        `────────────────────────────\n\n` +
+                        `âš ï¸  *Please Note:* This receipt is an automated proof that you submitted your payment. It does *NOT* mean your order is automatically confirmed. The vendor must manually verify the transfer in their bank app before shipping. Thank you for your patience! ðŸ™ `;
 
                     await safeSendMessage(vendorSock, remoteJid, { text: receiptText });
 
@@ -980,16 +980,16 @@ Reply in JSON format only: {"isReceipt": true/false, "isSuspicious": true/false,
                                 try {
                                     await safeSendMessage(vendorSock, remoteJid, {
                                         image: { url: p.imageUrl },
-                                        caption: `🛍️Ã¯Â¸Â *${p.name}*\n💰 *Price:* ₦${p.price.toLocaleString()}\n\n👉 Reply *"I want to buy ${p.name}"* to place an order!`
+                                        caption: `🛍️️ *${p.name}*\n💰 *Price:* ₦${p.price.toLocaleString()}\n\n👉 Reply *"I want to buy ${p.name}"* to place an order!`
                                     });
                                 } catch (e) {
                                     await safeSendMessage(vendorSock, remoteJid, {
-                                        text: `🛍️Ã¯Â¸Â *${p.name}*\n💰 *Price:* ₦${p.price.toLocaleString()}\n\n👉 Reply *"I want to buy ${p.name}"* to place an order!`
+                                        text: `🛍️️ *${p.name}*\n💰 *Price:* ₦${p.price.toLocaleString()}\n\n👉 Reply *"I want to buy ${p.name}"* to place an order!`
                                     });
                                 }
                             } else {
                                 await safeSendMessage(vendorSock, remoteJid, {
-                                    text: `🛍️Ã¯Â¸Â *${p.name}*\n💰 *Price:* ₦${p.price.toLocaleString()}\n\n👉 Reply *"I want to buy ${p.name}"* to place an order!`
+                                    text: `🛍️️ *${p.name}*\n💰 *Price:* ₦${p.price.toLocaleString()}\n\n👉 Reply *"I want to buy ${p.name}"* to place an order!`
                                 });
                             }
                         }
@@ -1079,19 +1079,19 @@ Rules:
                             // (notification already sent above)
 
                             await safeSendMessage(vendorSock, remoteJid, {
-                                text: `Ã°Å¸Å¡Å’ *Booking Confirmed: ${data.productName}*\n\n` +
+                                text: `🚌 *Booking Confirmed: ${data.productName}*\n\n` +
                                     `💰 *Fare / Price:* ₦${data.price.toLocaleString()}\n` +
                                     `Ref Code: *${orderRefNumber}*\n` +
-                                    `Ã°Å¸â€™Â³ *Payment Policy:* Pay cash/transfer upon boarding or service delivery. ✨\n\n` +
-                                    `Thank you for booking with *${storeName}*! See you soon! Ã°Å¸â„¢Å’`
+                                    `💳 *Payment Policy:* Pay cash/transfer upon boarding or service delivery. ✨\n\n` +
+                                    `Thank you for booking with *${storeName}*! See you soon! 🙌`
                             });
                             // Notify vendor
                             await safeSendMessage(vendorSock, `${cleanVendorPhone}@s.whatsapp.net`, {
-                                text: `Ã°Å¸â€â€ *NEW SERVICE BOOKING!*\n\nService/Route: ${data.productName}\nFare: ₦${data.price.toLocaleString()}\nCustomer: +${cleanRemoteJidNumber}\nPayment Mode: Pay on Boarding/Delivery`
+                                text: `🔔 *NEW SERVICE BOOKING!*\n\nService/Route: ${data.productName}\nFare: ₦${data.price.toLocaleString()}\nCustomer: +${cleanRemoteJidNumber}\nPayment Mode: Pay on Boarding/Delivery`
                             });
                         } else {
                             try {
-                                await safeSendMessage(vendorSock, remoteJid, { text: `Ã¢ÂÂ³ *Generating your secure payment account details...*` });
+                                await safeSendMessage(vendorSock, remoteJid, { text: `⏳ *Generating your secure payment account details...*` });
                                 const vAcc = await createKorapayVirtualAccount(cleanRemoteJidNumber, data.price, data.productName);
 
                                 await Order.create({
@@ -1119,16 +1119,16 @@ Rules:
                                 }
 
                                 await safeSendMessage(vendorSock, remoteJid, {
-                                    text: `🛍️Ã¯Â¸Â *Order Initiated: ${data.productName}*\n\n` +
+                                    text: `🛍️️ *Order Initiated: ${data.productName}*\n\n` +
                                         `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
-                                        `Ã°Å¸ÂÂ¦ *Payment Account Details (Kora Bank Transfer):*\n` +
-                                        `Ã¢â‚¬Â¢ Bank: *${vAcc.bankName}*\n` +
-                                        `Ã¢â‚¬Â¢ Account Number: *${vAcc.accountNumber}*\n` +
-                                        `Ã¢â‚¬Â¢ Account Name: *${vAcc.accountName}*\n\n` +
+                                        `🏦 *Payment Account Details (Kora Bank Transfer):*\n` +
+                                        `• Bank: *${vAcc.bankName}*\n` +
+                                        `• Account Number: *${vAcc.accountNumber}*\n` +
+                                        `• Account Name: *${vAcc.accountName}*\n\n` +
                                         `👉 Please transfer ₦${data.price.toLocaleString()} to the account above. Your payment will be verified automatically in 1-2 minutes! ✨`
                                 });
                             } catch (err) {
-                                console.error("Ã¢ÂÅ’ Korapay account generation error, falling back to static:", err.message);
+                                console.error("❌ Korapay account generation error, falling back to static:", err.message);
                                 const orderRefNumber = `NX-${Date.now().toString().slice(-6)}`;
                                 
                                 await Order.create({
@@ -1148,9 +1148,9 @@ Rules:
                                 }
 
                                 await safeSendMessage(vendorSock, remoteJid, {
-                                    text: `🛍️Ã¯Â¸Â *Order Initiated: ${data.productName}*\n\n` +
+                                    text: `🛍️️ *Order Initiated: ${data.productName}*\n\n` +
                                         `💰 *Amount Due:* ₦${data.price.toLocaleString()}\n\n` +
-                                        `Ã°Å¸ÂÂ¦ *Payment Account Details:*\n` +
+                                        `🏦 *Payment Account Details:*\n` +
                                         `Bank & Account: *${vendorBank}* (Manual Transfer)\n` +
                                         `Order Ref: *${orderRefNumber}*\n\n` +
                                         `👉 Please make payment to the account above and reply by sending *PAID* or sharing your receipt! ✨\n` +
@@ -1159,8 +1159,8 @@ Rules:
                             }
                         }
                     } catch (e) {
-                        console.error("Ã¢ÂÅ’ Checkout Processing Error:", e.message, e.stack);
-                        await safeSendMessage(vendorSock, remoteJid, { text: "Ã¢Å¡Â Ã¯Â¸Â Could not initiate order details at this time." });
+                        console.error("❌ Checkout Processing Error:", e.message, e.stack);
+                        await safeSendMessage(vendorSock, remoteJid, { text: "⚠️ Could not initiate order details at this time." });
                     }
                 } else {
                     await safeSendMessage(vendorSock, remoteJid, { text: reply });
@@ -1174,13 +1174,13 @@ Rules:
                         try {
                             await safeSendMessage(vendorSock, remoteJid, {
                                 image: { url: matchedProduct.imageUrl },
-                                caption: `🛍️Ã¯Â¸Â *${matchedProduct.name}*\n💰 *Price:* ₦${matchedProduct.price.toLocaleString()}`
+                                caption: `🛍️️ *${matchedProduct.name}*\n💰 *Price:* ₦${matchedProduct.price.toLocaleString()}`
                             });
                         } catch (e) { }
                     }
                 }
             } catch (error) {
-                console.error(`Ã¢ÂÅ’ Message Processing Error for ${msg?.key?.remoteJid}:`, error);
+                console.error(`❌ Message Processing Error for ${msg?.key?.remoteJid}:`, error);
             }
         }
     });
@@ -1212,7 +1212,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
         try {
             const code = await sock.requestPairingCode(myNumber);
             console.log(`\n======================================`);
-            console.log(`Ã°Å¸â€â€˜ NAXR MASTER PAIRING CODE: ${code}`);
+            console.log(`🔑 NAXR MASTER PAIRING CODE: ${code}`);
             console.log(`======================================\n`);
         } catch (err) { }
     }
@@ -1254,13 +1254,13 @@ async function startNaxrMasterAgent(isReconnect = false) {
                         const totalVendors = await Vendor.countDocuments({});
                         const totalOrders = await Order.countDocuments({ status: 'PAID' });
                         const totalProducts = await Product.countDocuments({});
-                        await safeSendMessage(sock, remoteJid, { text: `Ã°Å¸â€˜â€˜ *Naxr Super Admin*\n\nÃ°Å¸â€˜Â¥ Total Vendors: ${totalVendors}\n🛍️Ã¯Â¸Â Total Products Listed: ${totalProducts}\n✅ Total Paid Orders: ${totalOrders}` });
+                        await safeSendMessage(sock, remoteJid, { text: `👑 *Naxr Super Admin*\n\n👥 Total Vendors: ${totalVendors}\n🛍️️ Total Products Listed: ${totalProducts}\n✅ Total Paid Orders: ${totalOrders}` });
                         continue;
                     }
                     if (lowerText === 'admin vendors' || lowerText === 'vendors') {
                         const vendors = await Vendor.find({});
-                        const vList = vendors.map(v => `Ã¢â‚¬Â¢ ${v.storeName} (${v.phoneNumber})`).join("\n");
-                        await safeSendMessage(sock, remoteJid, { text: `Ã°Å¸â€˜â€˜ *Registered Vendors:*\n\n${vList || "No vendors yet."}` });
+                        const vList = vendors.map(v => `• ${v.storeName} (${v.phoneNumber})`).join("\n");
+                        await safeSendMessage(sock, remoteJid, { text: `👑 *Registered Vendors:*\n\n${vList || "No vendors yet."}` });
                         continue;
                     }
                     if (lowerText.startsWith('delete vendor ')) {
@@ -1283,7 +1283,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
                         if (v) {
                             await safeSendMessage(sock, remoteJid, { text: `✅ Vendor *${v.storeName}* (${targetPhone}) is now set to **Pro/Active**!` });
                         } else {
-                            await safeSendMessage(sock, remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â Vendor with phone number ${targetPhone} not found.` });
+                            await safeSendMessage(sock, remoteJid, { text: `⚠️ Vendor with phone number ${targetPhone} not found.` });
                         }
                         continue;
                     }
@@ -1291,9 +1291,9 @@ async function startNaxrMasterAgent(isReconnect = false) {
                         const targetPhone = cleanPhoneNumber(lowerText.replace('cancel vendor', '').trim());
                         const v = await Vendor.findOneAndUpdate({ phoneNumber: targetPhone }, { isPro: false }, { new: true });
                         if (v) {
-                            await safeSendMessage(sock, remoteJid, { text: `Ã°Å¸â€ºâ€˜ Vendor *${v.storeName}* (${targetPhone}) subscription canceled. Reverted to standard trial tier.` });
+                            await safeSendMessage(sock, remoteJid, { text: `🛑 Vendor *${v.storeName}* (${targetPhone}) subscription canceled. Reverted to standard trial tier.` });
                         } else {
-                            await safeSendMessage(sock, remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â Vendor with phone number ${targetPhone} not found.` });
+                            await safeSendMessage(sock, remoteJid, { text: `⚠️ Vendor with phone number ${targetPhone} not found.` });
                         }
                         continue;
                     }
@@ -1322,7 +1322,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
                     await RegSession.deleteOne({ phoneNumber: remoteJid });
                     const newSession = await RegSession.create({ phoneNumber: remoteJid, step: 1, products: [] });
 
-                    await sock.sendMessage(remoteJid, { text: `Ã°Å¸â€â€ž *Progress Reset!*\n\nOld store data cleared. Let's start over.\n\n` + getStepPrompt(1) });
+                    await sock.sendMessage(remoteJid, { text: `🔄 *Progress Reset!*\n\nOld store data cleared. Let's start over.\n\n` + getStepPrompt(1) });
                     continue;
                 }
 
@@ -1338,7 +1338,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
                         const targetPhone = cleanPhoneNumber(existingVendor.phoneNumber);
                         if (targetPhone !== existingVendor.phoneNumber) { existingVendor.phoneNumber = targetPhone; await existingVendor.save(); }
 
-                        await sock.sendMessage(remoteJid, { text: `Ã°Å¸â€â€ž Generating a fresh pairing code for *${existingVendor.storeName}*...` });
+                        await sock.sendMessage(remoteJid, { text: `🔄 Generating a fresh pairing code for *${existingVendor.storeName}*...` });
 
                         if (vendorSockets[targetPhone]) {
                             vendorSockets[targetPhone].ev.removeAllListeners('connection.update');
@@ -1354,16 +1354,16 @@ async function startNaxrMasterAgent(isReconnect = false) {
 
                         if (newCode && newCode !== "ALREADY_ACTIVE" && newCode !== "ERROR") {
                             await sock.sendMessage(remoteJid, {
-                                text: `Ã°Å¸â€â€˜ *YOUR VENDOR AI PAIRING CODE:* \`${newCode}\`\n\n🛍️¡Ã¯Â¸Â *Note:* Because Naxr is an automated AI, WhatsApp may show a security warning asking if you know who is linking the device. Tap *"Continue"* to authorize your bot.\n\n1. Go to WhatsApp Settings > Linked Devices > Link a Device.\n2. Tap Link with phone number instead.\n3. Enter the code above.`
+                                text: `🔑 *YOUR VENDOR AI PAIRING CODE:* \`${newCode}\`\n\n🛍️¡️ *Note:* Because Naxr is an automated AI, WhatsApp may show a security warning asking if you know who is linking the device. Tap *"Continue"* to authorize your bot.\n\n1. Go to WhatsApp Settings > Linked Devices > Link a Device.\n2. Tap Link with phone number instead.\n3. Enter the code above.`
                             });
                         } else if (newCode === "ALREADY_ACTIVE") await sock.sendMessage(remoteJid, { text: `✅ Your AI is already connected and active!` });
-                        else await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â Network delay. Please reply with *LINK* again in 5 seconds.` });
+                        else await sock.sendMessage(remoteJid, { text: `⚠️ Network delay. Please reply with *LINK* again in 5 seconds.` });
                     } else if (cleanText === 'done') {
                         const targetPhone = cleanPhoneNumber(existingVendor.phoneNumber);
                         const vSock = vendorSockets[targetPhone];
                         if (vSock && vSock.authState.creds.registered) await sock.sendMessage(remoteJid, { text: `✅ Your store *${existingVendor.storeName}* is already active!` });
-                        else await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â Your store is registered but not connected right now. Reply with *LINK* to get a new code!` });
-                    } else if (isRegTrigger) await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â Store *${existingVendor.storeName}* is registered. Reply with *LINK* to get a new pairing code!` });
+                        else await sock.sendMessage(remoteJid, { text: `⚠️ Your store is registered but not connected right now. Reply with *LINK* to get a new code!` });
+                    } else if (isRegTrigger) await sock.sendMessage(remoteJid, { text: `⚠️ Store *${existingVendor.storeName}* is registered. Reply with *LINK* to get a new pairing code!` });
                     continue;
                 }
 
@@ -1373,7 +1373,7 @@ async function startNaxrMasterAgent(isReconnect = false) {
                     if (!session) {
                         session = await RegSession.create({ phoneNumber: remoteJid, step: 1, products: [] });
                         await sock.sendMessage(remoteJid, { text: `👋 Welcome to *Naxr*!\n\n` + getStepPrompt(1) });
-                    } else await sock.sendMessage(remoteJid, { text: `Ã°Å¸â€â€ž *Resuming Onboarding*\n\n` + getStepPrompt(session.step, session.storeName) });
+                    } else await sock.sendMessage(remoteJid, { text: `🔄 *Resuming Onboarding*\n\n` + getStepPrompt(session.step, session.storeName) });
                     continue;
                 }
 
@@ -1384,12 +1384,12 @@ async function startNaxrMasterAgent(isReconnect = false) {
                 session.updatedAt = new Date();
 
                 if (!textMessage && !isImage) {
-                    await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â *Invalid Input:* Please reply with text or an image.` });
+                    await sock.sendMessage(remoteJid, { text: `⚠️ *Invalid Input:* Please reply with text or an image.` });
                     continue;
                 }
 
                 if (session.step === 1) {
-                    if (textMessage.length < 2) { await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â *Feedback:* Name must be at least 2 characters.\n\n` + getStepPrompt(1, session) }); continue; }
+                    if (textMessage.length < 2) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Name must be at least 2 characters.\n\n` + getStepPrompt(1, session) }); continue; }
                     session.storeName = textMessage; session.step = 2; await session.save(); await sock.sendMessage(remoteJid, { text: getStepPrompt(2, session) }); continue;
                 }
 
@@ -1407,12 +1407,12 @@ async function startNaxrMasterAgent(isReconnect = false) {
                         session.businessType = 'RETAIL';
                         session.category = textMessage;
                     }
-                    session.step = 3; await session.save(); await sock.sendMessage(remoteJid, { text: `Category set to *${session.category}*! Ã°Å¸â€˜Â\n\n` + getStepPrompt(3, session) }); continue;
+                    session.step = 3; await session.save(); await sock.sendMessage(remoteJid, { text: `Category set to *${session.category}*! 👍\n\n` + getStepPrompt(3, session) }); continue;
                 }
 
                 if (session.step === 3) {
-                    if (textMessage.length < 5) { await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â *Feedback:* Description too short.\n\n` + getStepPrompt(3, session) }); continue; }
-                    session.description = textMessage; session.step = 4; await session.save(); await sock.sendMessage(remoteJid, { text: `Description saved! Ã°Å¸Å½Â¯\n\n` + getStepPrompt(4, session) }); continue;
+                    if (textMessage.length < 5) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Description too short.\n\n` + getStepPrompt(3, session) }); continue; }
+                    session.description = textMessage; session.step = 4; await session.save(); await sock.sendMessage(remoteJid, { text: `Description saved! 🎯\n\n` + getStepPrompt(4, session) }); continue;
                 }
 
                 if (session.step === 4) {
@@ -1426,56 +1426,56 @@ async function startNaxrMasterAgent(isReconnect = false) {
                             session.allowNegotiation = true;
                             session.maxDiscountPercent = discount;
                         }
-                        session.step = 5; await session.save(); await sock.sendMessage(remoteJid, { text: `Negotiation settings saved! Ã°Å¸Â¤Â\n\n` + getStepPrompt(5, session) }); continue;
+                        session.step = 5; await session.save(); await sock.sendMessage(remoteJid, { text: `Negotiation settings saved! 🤝\n\n` + getStepPrompt(5, session) }); continue;
                     } else if (session.businessType === 'SERVICE_TRANSPORT') {
                         if (cleanText.includes('board') || cleanText === '1') session.paymentPolicy = 'PAY_ON_BOARD';
                         else if (cleanText.includes('upfront') || cleanText === '2') session.paymentPolicy = 'UPFRONT';
                         else session.paymentPolicy = 'FLEXIBLE';
 
-                        session.step = 5; await session.save(); await sock.sendMessage(remoteJid, { text: `Payment policy saved: *${session.paymentPolicy}*! Ã°Å¸â€™Â³\n\n` + getStepPrompt(5, session) }); continue;
+                        session.step = 5; await session.save(); await sock.sendMessage(remoteJid, { text: `Payment policy saved: *${session.paymentPolicy}*! 💳\n\n` + getStepPrompt(5, session) }); continue;
                     } else {
                         const clean = cleanPhoneNumber(textMessage);
-                        if (clean.length < 10) { await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â *Feedback:* Invalid phone number format.` }); continue; }
-                        session.vendorRealPhone = clean; session.step = 6; await session.save(); await sock.sendMessage(remoteJid, { text: `Phone number *${clean}* saved! Ã°Å¸â€œÅ¾\n\n` + getStepPrompt(6, session) }); continue;
+                        if (clean.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Invalid phone number format.` }); continue; }
+                        session.vendorRealPhone = clean; session.step = 6; await session.save(); await sock.sendMessage(remoteJid, { text: `Phone number *${clean}* saved! 📞\n\n` + getStepPrompt(6, session) }); continue;
                     }
                 }
 
                 if (session.step === 5) {
                     const clean = cleanPhoneNumber(textMessage);
-                    if (clean.length < 10) { await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â *Feedback:* Invalid phone number format.` }); continue; }
-                    session.vendorRealPhone = clean; session.step = 6; await session.save(); await sock.sendMessage(remoteJid, { text: `Phone number *${clean}* saved! Ã°Å¸â€œÅ¾\n\n` + getStepPrompt(6, session) }); continue;
+                    if (clean.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Invalid phone number format.` }); continue; }
+                    session.vendorRealPhone = clean; session.step = 6; await session.save(); await sock.sendMessage(remoteJid, { text: `Phone number *${clean}* saved! 📞\n\n` + getStepPrompt(6, session) }); continue;
                 }
 
                 if (session.step === 6) {
                     if (cleanText === 'skip' || cleanText === 'no' || cleanText === 'none') {
                         session.bankDetails = "Direct / Cash Payment";
                         session.subaccountCode = null;
-                        session.step = 7; await session.save(); await sock.sendMessage(remoteJid, { text: `Bank details skipped! Ã¢ÂÂ©\n\n` + getStepPrompt(7, session) }); continue;
+                        session.step = 7; await session.save(); await sock.sendMessage(remoteJid, { text: `Bank details skipped! ⏩\n\n` + getStepPrompt(7, session) }); continue;
                     }
                     const parts = textMessage.split('-');
-                    if (parts.length < 2) { await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â *Feedback:* Use format "Bank Name - Account Number" or reply *SKIP*.\n\n` + getStepPrompt(6, session) }); continue; }
+                    if (parts.length < 2) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Use format "Bank Name - Account Number" or reply *SKIP*.\n\n` + getStepPrompt(6, session) }); continue; }
 
                     const bankName = parts[0].trim();
                     const accNo = parts[1].replace(/[^0-9]/g, '');
-                    if (accNo.length < 10) { await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â *Feedback:* Account number must be 10 digits or reply *SKIP*.\n\n` + getStepPrompt(6, session) }); continue; }
+                    if (accNo.length < 10) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Account number must be 10 digits or reply *SKIP*.\n\n` + getStepPrompt(6, session) }); continue; }
 
-                    await sock.sendMessage(remoteJid, { text: `Ã¢ÂÂ³ Saving your bank details...` });
+                    await sock.sendMessage(remoteJid, { text: `⏳ Saving your bank details...` });
                     const bankCode = await lookupBankCode(bankName);
 
                     session.bankDetails = `${bankName} - ${accNo}`;
                     session.subaccountCode = bankCode || null;
-                    session.step = 7; await session.save(); await sock.sendMessage(remoteJid, { text: `Bank details saved! Ã°Å¸â€â€™\n\n` + getStepPrompt(7, session) }); continue;
+                    session.step = 7; await session.save(); await sock.sendMessage(remoteJid, { text: `Bank details saved! 🔒\n\n` + getStepPrompt(7, session) }); continue;
                 }
 
                 if (session.step === 7) {
-                    if (textMessage.length < 3) { await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â *Feedback:* Please provide more delivery/pickup details.\n\n` + getStepPrompt(7, session) }); continue; }
-                    session.deliveryInfo = textMessage; session.step = 8; await session.save(); await sock.sendMessage(remoteJid, { text: `Delivery/Pickup info saved! Ã°Å¸â€œÂ\n\n` + getStepPrompt(8, session) }); continue;
+                    if (textMessage.length < 3) { await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Please provide more delivery/pickup details.\n\n` + getStepPrompt(7, session) }); continue; }
+                    session.deliveryInfo = textMessage; session.step = 8; await session.save(); await sock.sendMessage(remoteJid, { text: `Delivery/Pickup info saved! 📝\n\n` + getStepPrompt(8, session) }); continue;
                 }
 
                 if (session.step === 8) {
                     if (cleanText === 'done' || cleanText === 'finish') {
                         const targetPhone = cleanPhoneNumber(session.vendorRealPhone || remoteJid);
-                        await sock.sendMessage(remoteJid, { text: `Ã¢ÂÂ³ *Finalizing setup... Generating your AI pairing code. Please wait a few seconds...*` });
+                        await sock.sendMessage(remoteJid, { text: `⏳ *Finalizing setup... Generating your AI pairing code. Please wait a few seconds...*` });
 
                         await Vendor.findOneAndUpdate(
                             { phoneNumber: targetPhone },
@@ -1528,17 +1528,17 @@ async function startNaxrMasterAgent(isReconnect = false) {
                         await RegSession.deleteOne({ phoneNumber: remoteJid });
 
                         if (pairingCode && pairingCode !== "ALREADY_ACTIVE" && pairingCode !== "ERROR") {
-                            await sock.sendMessage(remoteJid, { text: `🎉 *SETUP COMPLETED SUCCESSFULLY!* 🚀\n\nYour store *${session.storeName}* is active!\n\nÃ°Å¸â€â€˜ *YOUR VENDOR AI PAIRING CODE:* \`${pairingCode}\`\n\n🛍️¡Ã¯Â¸Â *Note:* Because Naxr is an automated AI, WhatsApp may show a security warning asking if you know who is linking the device. Tap *"Continue"* to authorize your bot.\n\n*How to link your AI:*\n1. Open WhatsApp Settings > Linked Devices > Link a Device > Link with phone number instead.\n2. Enter code on phone number *+${targetPhone}*! ✨` });
+                            await sock.sendMessage(remoteJid, { text: `🎉 *SETUP COMPLETED SUCCESSFULLY!* 🚀\n\nYour store *${session.storeName}* is active!\n\n🔑 *YOUR VENDOR AI PAIRING CODE:* \`${pairingCode}\`\n\n🛍️¡️ *Note:* Because Naxr is an automated AI, WhatsApp may show a security warning asking if you know who is linking the device. Tap *"Continue"* to authorize your bot.\n\n*How to link your AI:*\n1. Open WhatsApp Settings > Linked Devices > Link a Device > Link with phone number instead.\n2. Enter code on phone number *+${targetPhone}*! ✨` });
                         } else if (pairingCode === "ALREADY_ACTIVE") {
                             await sock.sendMessage(remoteJid, { text: `🎉 *SETUP COMPLETED!* Your AI is already connected and active! ✨` });
                         } else {
-                            await sock.sendMessage(remoteJid, { text: `🎉 *SETUP COMPLETED!* 🚀\n\nYour store is fully saved!\n\nÃ¢Å¡Â Ã¯Â¸Â *Meta's network experienced a slight delay so your pairing code couldn't be instantly generated.*\n\n👉 *Please reply with LINK right now to generate your code!*` });
+                            await sock.sendMessage(remoteJid, { text: `🎉 *SETUP COMPLETED!* 🚀\n\nYour store is fully saved!\n\n⚠️ *Meta's network experienced a slight delay so your pairing code couldn't be instantly generated.*\n\n👉 *Please reply with LINK right now to generate your code!*` });
                         }
                         continue;
                     }
 
                     if (isImage) {
-                        await sock.sendMessage(remoteJid, { react: { text: "Ã¢ÂÂ³", key: msg.key } });
+                        await sock.sendMessage(remoteJid, { react: { text: "⏳", key: msg.key } });
                         const buffer = await downloadMediaMessage(msg, 'buffer', {});
                         const imageUrl = await uploadToCloudinary(buffer);
 
@@ -1551,8 +1551,8 @@ async function startNaxrMasterAgent(isReconnect = false) {
 
                         if (!name || price === 0) {
                             session.pendingProductImage = imageUrl; await session.save();
-                            await sock.sendMessage(remoteJid, { react: { text: "Ã¢Ââ€œ", key: msg.key } });
-                            await sock.sendMessage(remoteJid, { text: `Ã°Å¸â€œÂ¸ *Photo received!* Reply with Product Name and Price (e.g., \`Vintage Shirt - 12000\`).` });
+                            await sock.sendMessage(remoteJid, { react: { text: "❓", key: msg.key } });
+                            await sock.sendMessage(remoteJid, { text: `📸 *Photo received!* Reply with Product Name and Price (e.g., \`Vintage Shirt - 12000\`).` });
                         } else {
                             session.products.push({ name, price, imageUrl }); session.pendingProductImage = undefined; await session.save();
                             await sock.sendMessage(remoteJid, { react: { text: "✅", key: msg.key } });
@@ -1571,17 +1571,17 @@ async function startNaxrMasterAgent(isReconnect = false) {
                             session.products.push({ name, price, imageUrl: session.pendingProductImage }); session.pendingProductImage = undefined; await session.save();
                             await sock.sendMessage(remoteJid, { text: `✅ *Item Saved:* ${name} (₦${price.toLocaleString()})\n\nSend another photo, or reply *DONE* to finish! ✨` });
                         } else {
-                            await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â *Feedback:* Please include the price numbers (e.g., \`Shirt - 12000\`).` });
+                            await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Please include the price numbers (e.g., \`Shirt - 12000\`).` });
                         }
                         continue;
                     }
 
                     if (!isImage && cleanText !== 'done' && !session.pendingProductImage) {
-                        await sock.sendMessage(remoteJid, { text: `Ã¢Å¡Â Ã¯Â¸Â *Feedback:* Please send a product photo, or reply *DONE* if you are finished adding products.` });
+                        await sock.sendMessage(remoteJid, { text: `⚠️ *Feedback:* Please send a product photo, or reply *DONE* if you are finished adding products.` });
                     }
                 }
             } catch (error) {
-                console.error(`Ã¢ÂÅ’ Message Processing Error for ${msg?.key?.remoteJid}:`, error);
+                console.error(`❌ Message Processing Error for ${msg?.key?.remoteJid}:`, error);
             }
         }
     });
@@ -1596,7 +1596,7 @@ app.post('/webhook/flutterwave', express.raw({ type: 'application/json' }), asyn
     try {
         const svixSecret = process.env.SVIX_SECRET;
         if (!svixSecret) {
-            console.error("Ã¢ÂÅ’ SVIX_SECRET not set");
+            console.error("❌ SVIX_SECRET not set");
             return;
         }
 
@@ -1648,7 +1648,7 @@ app.post('/webhook/korapay', express.raw({ type: 'application/json' }), async (r
         const secretKey = process.env.KORAPAY_SECRET_KEY;
 
         if (!signature || !secretKey) {
-            console.error("Ã¢ÂÅ’ Missing Korapay signature or secret key");
+            console.error("❌ Missing Korapay signature or secret key");
             return;
         }
 
@@ -1658,7 +1658,7 @@ app.post('/webhook/korapay', express.raw({ type: 'application/json' }), async (r
         const computedSignature = hmac.digest('hex');
 
         if (computedSignature !== signature) {
-            console.error("Ã¢ÂÅ’ Invalid Korapay webhook signature");
+            console.error("❌ Invalid Korapay webhook signature");
             return;
         }
 
@@ -1786,7 +1786,7 @@ app.post('/api/auth/vendor/login', async (req, res) => {
         await Otp.findOneAndUpdate({ phone: cleaned }, { code, createdAt: new Date() }, { upsert: true });
 
         const targetJid = `${cleaned}@s.whatsapp.net`;
-        const text = `Ã°Å¸â€Â *Naxr Merchant Portal Login Code:* ${code}\n\nDo not share this code with anyone. It expires in 5 minutes.`;
+        const text = `🔐 *Naxr Merchant Portal Login Code:* ${code}\n\nDo not share this code with anyone. It expires in 5 minutes.`;
 
         let sent = false;
         if (vendorSockets[cleaned]) {
@@ -2144,7 +2144,7 @@ async function bootAllVendors() {
         for (const v of vendors) {
             const cleanPhone = cleanPhoneNumber(v.phoneNumber);
             if (!cleanPhone) continue;
-            console.log(`Ã°Å¸â€Å’ Preparing boot for ${v.storeName}...`);
+            console.log(`🔌 Preparing boot for ${v.storeName}...`);
             await delay(8000);
             spawnVendorAgent(cleanPhone, v.storeName, false);
         }
@@ -2154,7 +2154,7 @@ async function bootAllVendors() {
 app.get('/', (req, res) => res.send('Naxr AI Engine Active! 🚀'));
 
 const PORT = process.env.PORT || 3000;
-const server = app.listen(PORT, () => console.log(`Ã°Å¸Å’Â Server active on port ${PORT}`));
+const server = app.listen(PORT, () => console.log(`🌐 Server active on port ${PORT}`));
 
 const { Server } = require("socket.io");
 const io = new Server(server, {
@@ -2168,18 +2168,18 @@ io.on("connection", (socket) => {
     const vendorPhone = socket.handshake.query.vendor_phone;
     if (vendorPhone) {
         socket.join(vendorPhone);
-        console.log(`Ã°Å¸â€Å’ Socket client connected for vendor ${vendorPhone}`);
+        console.log(`🔌 Socket client connected for vendor ${vendorPhone}`);
     }
 
     socket.on("register_vendor", (data) => {
         if (data?.vendor_phone) {
             socket.join(data.vendor_phone);
-            console.log(`Ã°Å¸â€Å’ Socket client registered for vendor ${data.vendor_phone}`);
+            console.log(`🔌 Socket client registered for vendor ${data.vendor_phone}`);
         }
     });
 
     socket.on("disconnect", () => {
-        console.log("Ã°Å¸â€Å’ Socket client disconnected");
+        console.log("🔌 Socket client disconnected");
     });
 });
 
@@ -2189,21 +2189,21 @@ function notifyVendorClients(vendorPhone, eventName, data) {
 
 mongoose.connect(process.env.MONGODB_URI)
     .then(() => console.log("📦 Connected to MongoDB Atlas Cloud!"))
-    .catch(err => console.error("Ã¢ÂÅ’ MongoDB Error:", err.message));
+    .catch(err => console.error("❌ MongoDB Error:", err.message));
 
 startNaxrMasterAgent().then(() => bootAllVendors());
 
 // Graceful shutdown to prevent session conflicts during zero-downtime redeploys on Render
 async function gracefulShutdown(signal) {
-    console.log(`Ã¢Å¡Â Ã¯Â¸Â Received ${signal}. Commencing graceful shutdown...`);
+    console.log(`⚠️ Received ${signal}. Commencing graceful shutdown...`);
 
     server.close(() => {
-        console.log("Ã°Å¸Å’Â HTTP server closed.");
+        console.log("🌐 HTTP server closed.");
     });
 
     for (const phone in vendorSockets) {
         if (vendorSockets[phone]) {
-            console.log(`Ã°Å¸â€Å’ Closing connection for vendor ${phone}...`);
+            console.log(`🔌 Closing connection for vendor ${phone}...`);
             try {
                 vendorSockets[phone].ev.removeAllListeners('connection.update');
                 vendorSockets[phone].ev.removeAllListeners('creds.update');
@@ -2216,7 +2216,7 @@ async function gracefulShutdown(signal) {
     }
 
     if (globalSock) {
-        console.log(`Ã°Å¸â€Å’ Closing connection for master agent...`);
+        console.log(`🔌 Closing connection for master agent...`);
         try {
             globalSock.ev.removeAllListeners('connection.update');
             globalSock.ev.removeAllListeners('creds.update');

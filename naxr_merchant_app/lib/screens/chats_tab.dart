@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
+import 'dart:async';
 import '../stores/vendor_store.dart';
 import '../theme.dart';
 import 'chat_detail_screen.dart';
@@ -48,17 +49,35 @@ class _ChatsTabState extends State<ChatsTab> {
   List<ChatListItem> _chats = [];
   List<ChatListItem> _filteredChats = [];
   bool _isLoading = false;
+  int _lastRefreshCount = -1;
+  Timer? _refreshTimer;
 
   @override
   void initState() {
     super.initState();
     _searchController.addListener(_filterChats);
     _fetchChats();
+    // Periodic fallback refresh every 30 seconds
+    _refreshTimer = Timer.periodic(const Duration(seconds: 30), (_) => _fetchChats());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // React to new socket messages triggering a refresh
+    final store = Provider.of<VendorStore>(context);
+    if (store.chatRefreshCount != _lastRefreshCount) {
+      _lastRefreshCount = store.chatRefreshCount;
+      if (_lastRefreshCount > 0) {
+        _fetchChats();
+      }
+    }
   }
 
   @override
   void dispose() {
     _searchController.dispose();
+    _refreshTimer?.cancel();
     super.dispose();
   }
 

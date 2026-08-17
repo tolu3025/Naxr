@@ -56,6 +56,7 @@ class _TabsScreenState extends State<TabsScreen> {
         },
         onNewMessage: (data) {
           store.fetchDashboard();
+          store.triggerChatRefresh();
           final phone = data['customer_phone'] ?? '';
           final text = data['text'] ?? '';
           if (phone.isNotEmpty && text.isNotEmpty) {
@@ -78,6 +79,7 @@ class _TabsScreenState extends State<TabsScreen> {
         },
         onAiReplied: (data) {
           store.fetchDashboard();
+          store.triggerChatRefresh();
           final phone = data['customer_phone'] ?? '';
           final text = data['text'] ?? '';
           if (phone.isNotEmpty && text.isNotEmpty) {
