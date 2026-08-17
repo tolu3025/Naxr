@@ -177,5 +177,21 @@ class VendorStore extends ChangeNotifier {
       final data = jsonDecode(response.body);
       throw Exception(data['error'] ?? 'Failed to save settings');
     }
+  Future<String> fetchPairingCode() async {
+    if (_phone == null) throw Exception('No phone number logged in');
+    final response = await http
+        .get(
+          Uri.parse('$baseUrl/api/vendor/$_phone/pair-code'),
+          headers: _headers,
+        )
+        .timeout(const Duration(seconds: 45));
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+      return data['pairingCode'] ?? '';
+    } else {
+      final data = jsonDecode(response.body);
+      throw Exception(data['error'] ?? 'Failed to generate pairing code');
+    }
   }
 }

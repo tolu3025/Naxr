@@ -126,6 +126,18 @@ class _DashboardTabState extends State<DashboardTab> {
                                   color: AppTheme.textMuted,
                                 ),
                               ),
+                              const SizedBox(width: 8),
+                              InkWell(
+                                onTap: () => _handleShowPairingCodeDialog(context, store),
+                                child: Text(
+                                  store.isConnected ? '(Relink)' : '(Link Device)',
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    color: AppTheme.primaryGreen,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
                             ],
                           ),
                         ],
@@ -417,6 +429,105 @@ class _DashboardTabState extends State<DashboardTab> {
           ],
         ),
       ),
+    );
+  void _handleShowPairingCodeDialog(BuildContext context, VendorStore store) {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return FutureBuilder<String>(
+              future: store.fetchPairingCode(),
+              builder: (context, snapshot) {
+                final isLoading = snapshot.connectionState == ConnectionState.waiting;
+                final isError = snapshot.hasError;
+                final code = snapshot.data ?? '';
+
+                return AlertDialog(
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                  title: Row(
+                    children: [
+                      Icon(
+                        isError ? Icons.error_outline : (isLoading ? Icons.hourglass_top : Icons.link),
+                        color: isError ? Colors.red : AppTheme.primaryGreen,
+                      ),
+                      const SizedBox(width: 8),
+                      Text(isError ? 'Pairing Failed' : (isLoading ? 'Generating Code...' : 'Link WhatsApp')),
+                    ],
+                  ),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      if (isLoading) ...[
+                        const SizedBox(height: 16),
+                        const Center(child: CircularProgressIndicator(color: AppTheme.primaryGreen)),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'Naxr is resetting your session keys and requesting a secure WhatsApp pairing code. This takes about 10-15 seconds...',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(fontSize: 13, color: AppTheme.textMuted),
+                        ),
+                      ] else if (isError) ...[
+                        Text(
+                          'Could not generate pairing code:\n${snapshot.error}',
+                          style: const TextStyle(color: Colors.red, fontSize: 14),
+                        ),
+                      ] else ...[
+                        const Text(
+                          'Your WhatsApp pairing code is:',
+                          style: TextStyle(fontSize: 14, color: AppTheme.secondaryDark),
+                        ),
+                        const SizedBox(height: 12),
+                        Container(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.grey.shade100,
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(color: Colors.grey.shade300),
+                          ),
+                          child: Center(
+                            child: SelectableText(
+                              code,
+                              style: const TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 2.0,
+                                color: AppTheme.primaryGreen,
+                              ),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        const Text(
+                          'How to link:',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.secondaryDark),
+                        ),
+                        const SizedBox(height: 8),
+                        const Text(
+                          '1. Open WhatsApp on your phone.\n'
+                          '2. Tap Settings > Linked Devices > Link a Device.\n'
+                          '3. Select "Link with phone number instead".\n'
+                          '4. Enter the 8-character code shown above.',
+                          style: TextStyle(fontSize: 12, height: 1.4, color: AppTheme.textMuted),
+                        ),
+                      ]
+                    ],
+                  ),
+                  actions: [
+                    if (!isLoading)
+                      TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: const Text('Close'),
+                      ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
     );
   }
 }

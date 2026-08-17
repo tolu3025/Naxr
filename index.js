@@ -1727,6 +1727,19 @@ app.get('/api/admin/reset-session', async (req, res) => {
     }
 });
 
+app.get('/api/admin/check-env', async (req, res) => {
+    return res.json({
+        has_mongodb_uri: !!process.env.MONGODB_URI,
+        has_openai_key: !!process.env.OPENAI_API_KEY,
+        openai_key_prefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.substring(0, 12) + '...' : null,
+        has_cloudinary_key: !!process.env.CLOUDINARY_API_KEY,
+        has_cloudinary_secret: !!process.env.CLOUDINARY_API_SECRET,
+        has_korapay_secret: !!process.env.KORAPAY_SECRET_KEY,
+        has_admin_phone: !!process.env.ADMIN_PHONE,
+        admin_phone: process.env.ADMIN_PHONE,
+        port: process.env.PORT
+    });
+});
 // Portal Authentication Routes
 app.post('/api/auth/vendor/login', async (req, res) => {
     try {
@@ -1932,6 +1945,34 @@ app.delete('/api/vendor/:phone/products/:id', checkAuth, async (req, res) => {
 
         await Product.deleteOne({ vendorPhone: phone, _id: req.params.id });
         return res.json({ success: true });
+    } catch (e) {
+        return res.status(500).json({ error: e.message });
+    }
+});
+app.get('/api/vendor/:phone/pair-code', checkAuth, async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized" });
+
+        const vendor = await Vendor.findOne({ phoneNumber: phone });
+        if (!vendor) return res.status(404).json({ error: "Vendor not found" });
+
+        if (vendorSockets[phone]) {
+            vendorSockets[phone].ev.removeAllListeners('connection.update');
+            vendorSockets[phone].ev.removeAllListeners('creds.update');
+            vendorSockets[phone].ev.removeAllListeners('messages.upsert');
+            try { vendorSockets[phone].ws.close(); } catch (e) { }
+            delete vendorSockets[phone];
+            await delay(1500);
+        }
+        await Auth.deleteMany({ _id: { $regex: "^vendor_" } });
+
+        const code = await spawnVendorAgent(phone, vendor.storeName, true);
+        if (code && code !== "ERROR") {
+            return res.json({ pairingCode: code });
+        } else {
+            return res.status(500).json({ error: "Failed to generate pairing code. Please try again." });
+        }
     } catch (e) {
         return res.status(500).json({ error: e.message });
     }
