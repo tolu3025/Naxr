@@ -430,6 +430,8 @@ class _DashboardTabState extends State<DashboardTab> {
         ),
       ),
     );
+  }
+
   void _handleShowPairingCodeDialog(BuildContext context, VendorStore store) {
     showDialog(
       context: context,
