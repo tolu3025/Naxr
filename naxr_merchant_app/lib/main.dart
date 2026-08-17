@@ -6,8 +6,11 @@ import 'screens/login_screen.dart';
 import 'screens/tabs_screen.dart';
 import 'theme.dart';
 
-void main() {
+import 'services/notification_service.dart';
+
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await NotificationService().init();
   runApp(const MyApp());
 }
 

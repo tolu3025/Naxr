@@ -479,6 +479,9 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 
         if (connection === 'open') {
             console.log(`🚀 Vendor Agent LIVE for ${storeName} (${cleanPhone})!`);
+            if (typeof notifyVendorClients === 'function') {
+                notifyVendorClients(cleanPhone, 'whatsapp_status', { connected: true });
+            }
             try {
                 const vendorData = await Vendor.findOne({ phoneNumber: cleanPhone });
                 if (vendorData && !vendorData.docsSent) {
@@ -510,6 +513,9 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
         }
 
         if (connection === 'close') {
+            if (typeof notifyVendorClients === 'function') {
+                notifyVendorClients(cleanPhone, 'whatsapp_status', { connected: false });
+            }
             const statusCode = lastDisconnect?.error?.output?.statusCode;
             if (statusCode === 440 || statusCode === 401 || statusCode === 428 || statusCode === 409) {
                 if (vendorSockets[cleanPhone]) {
@@ -1047,6 +1053,19 @@ Rules:
                                 virtualAccountNumber: orderRefNumber,
                                 status: 'BOOKED'
                             });
+                            if (typeof notifyVendorClients === 'function') {
+                                notifyVendorClients(cleanVendorPhone, 'new_order', {
+                                    amount: data.price,
+                                    productName: data.productName
+                                });
+                            }
+
+                            if (typeof notifyVendorClients === 'function') {
+                                notifyVendorClients(cleanVendorPhone, 'new_order', {
+                                    amount: data.price,
+                                    productName: data.productName
+                                });
+                            }
 
                             await safeSendMessage(vendorSock, remoteJid, {
                                 text: `🚌 *Booking Confirmed: ${data.productName}*\n\n` +
@@ -1074,6 +1093,19 @@ Rules:
                                     txRef: vAcc.txRef,
                                     status: 'PENDING'
                                 });
+                                if (typeof notifyVendorClients === 'function') {
+                                    notifyVendorClients(cleanVendorPhone, 'new_order', {
+                                        amount: data.price,
+                                        productName: data.productName
+                                    });
+                                }
+
+                                if (typeof notifyVendorClients === 'function') {
+                                    notifyVendorClients(cleanVendorPhone, 'new_order', {
+                                        amount: data.price,
+                                        productName: data.productName
+                                    });
+                                }
 
                                 await safeSendMessage(vendorSock, remoteJid, {
                                     text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +
@@ -1097,6 +1129,12 @@ Rules:
                                     virtualAccountNumber: orderRefNumber,
                                     status: 'PENDING'
                                 });
+                                if (typeof notifyVendorClients === 'function') {
+                                    notifyVendorClients(cleanVendorPhone, 'new_order', {
+                                        amount: data.price,
+                                        productName: data.productName
+                                    });
+                                }
 
                                 await safeSendMessage(vendorSock, remoteJid, {
                                     text: `🛍️ *Order Initiated: ${data.productName}*\n\n` +

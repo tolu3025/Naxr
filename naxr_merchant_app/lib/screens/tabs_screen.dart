@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/socket_service.dart';
 import '../stores/vendor_store.dart';
+import '../services/notification_service.dart';
 import '../theme.dart';
 import 'dashboard_tab.dart';
 import 'chats_tab.dart';
@@ -51,16 +52,44 @@ class _TabsScreenState extends State<TabsScreen> {
       socketService.connect(
         vendorPhone: store.phone!,
         onConnect: () {
-          store.setConnected(true);
+          store.fetchDashboard();
         },
         onNewMessage: (data) {
           store.fetchDashboard();
+          final phone = data['customer_phone'] ?? '';
+          final text = data['text'] ?? '';
+          if (phone.isNotEmpty && text.isNotEmpty) {
+            NotificationService().showNotification(
+              id: DateTime.now().millisecond,
+              title: '💬 New WhatsApp Message',
+              body: '+$phone: $text',
+            );
+          }
         },
         onNewOrder: (data) {
           store.fetchDashboard();
+          final amount = data['amount'] ?? 0;
+          final product = data['productName'] ?? '';
+          NotificationService().showNotification(
+            id: DateTime.now().millisecond,
+            title: '🎉 New Booking / Order Received!',
+            body: '$product — ₦$amount',
+          );
         },
         onAiReplied: (data) {
           store.fetchDashboard();
+          final phone = data['customer_phone'] ?? '';
+          final text = data['text'] ?? '';
+          if (phone.isNotEmpty && text.isNotEmpty) {
+            NotificationService().showNotification(
+              id: DateTime.now().millisecond,
+              title: '🤖 AI Bot Replied to +$phone',
+              body: text,
+            );
+          }
+        },
+        onWhatsappStatus: (connected) {
+          store.setConnected(connected);
         },
       );
     }

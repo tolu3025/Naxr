@@ -14,6 +14,7 @@ class SocketService {
     required Function(dynamic) onNewMessage,
     required Function(dynamic) onNewOrder,
     required Function(dynamic) onAiReplied,
+    Function(bool)? onWhatsappStatus,
   }) {
     // Disconnect existing socket first
     disconnect();
@@ -51,8 +52,15 @@ class SocketService {
         onAiReplied(data);
       });
 
+      _socket!.on('whatsapp_status', (data) {
+        debugPrint('WebSocket received [whatsapp_status]: $data');
+        final connected = data['connected'] == true;
+        if (onWhatsappStatus != null) onWhatsappStatus(connected);
+      });
+
       _socket!.onDisconnect((_) {
         debugPrint('WebSocket disconnected');
+        if (onWhatsappStatus != null) onWhatsappStatus(false);
       });
 
       _socket!.onConnectError((err) {
