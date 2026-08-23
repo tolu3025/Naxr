@@ -138,6 +138,39 @@ async function clearAuthSession(sessionId) {
     }
 }
 
+// Wipe only the per-contact Signal session keys and sender-key data that go
+// stale across Render restarts (causing Bad MAC / MessageCounterError).
+// Credentials, pre-keys, and signed-pre-keys are intentionally preserved so
+// the device stays registered without re-pairing.
+async function cleanStaleSessionKeys(sessionId) {
+    // 1. Evict from in-memory cache
+    const localCache = authStateCache.get(sessionId);
+    if (localCache) {
+        for (const key of [...localCache.keys()]) {
+            if (
+                key.startsWith('session-') ||
+                key.startsWith('sender-key-') ||
+                key.startsWith('sender-key-memory-')
+            ) {
+                localCache.delete(key);
+            }
+        }
+    }
+    // 2. Delete from MongoDB
+    try {
+        const result = await Auth.deleteMany({
+            _id: {
+                $regex: `^${sessionId}-(session-|sender-key-|sender-key-memory-)`
+            }
+        });
+        if (result.deletedCount > 0) {
+            console.log(`🧹 Wiped ${result.deletedCount} stale Signal session keys for [${sessionId}]`);
+        }
+    } catch (err) {
+        console.error(`⚠️ cleanStaleSessionKeys error [${sessionId}]:`, err.message);
+    }
+}
+
 async function useMongoDBAuthState(sessionId = 'creds') {
     if (!authStateCache.has(sessionId)) {
         authStateCache.set(sessionId, new Map());
@@ -555,6 +588,9 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
         }
         return null;
     }
+
+    // Clean stale Signal sessions every fresh boot to prevent Bad MAC / MessageCounterError
+    await cleanStaleSessionKeys(`vendor_${cleanPhone}`);
 
     const { state, saveCreds } = await useMongoDBAuthState(`vendor_${cleanPhone}`);
 
@@ -1314,6 +1350,8 @@ Rules:
 // 5. MASTER ONBOARDING AGENT SOCKET
 // ----------------------------------------------------
 async function startNaxrMasterAgent(isReconnect = false) {
+    // Clean stale Signal sessions on every boot to prevent Bad MAC / MessageCounterError
+    await cleanStaleSessionKeys('master_agent_session');
     const { state, saveCreds } = await useMongoDBAuthState('master_agent_session');
 
     const sock = makeWASocket({
@@ -2285,7 +2323,7 @@ async function bootAllVendors() {
             const cleanPhone = cleanPhoneNumber(v.phoneNumber);
             if (!cleanPhone) continue;
             console.log(`🔌 Preparing boot for ${v.storeName}...`);
-            await delay(8000);
+            await delay(10000); // Slightly longer gap to avoid WA rate limits on boot
             spawnVendorAgent(cleanPhone, v.storeName, false);
         }
     } catch (err) { }
