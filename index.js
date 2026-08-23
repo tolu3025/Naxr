@@ -6,7 +6,8 @@ const {
     proto,
     delay,
     downloadMediaMessage,
-    DisconnectReason
+    DisconnectReason,
+    useMultiFileAuthState
 } = require('@whiskeysockets/baileys');
 const { OpenAI } = require('openai');
 const pino = require('pino');
@@ -126,14 +127,13 @@ const Knowledge = mongoose.model('Knowledge', new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 }));
 
-// In-memory cache per session to avoid redundant MongoDB reads and reduce
-// Signal session mismatches caused by stale DB reads on Render restarts.
-const authStateCache = new Map();
-
 async function clearAuthSession(sessionId) {
-    authStateCache.delete(sessionId);
     try {
         await Auth.deleteMany({ _id: { $regex: `^${sessionId}` } });
+        const dir = path.join(process.cwd(), 'auth_states', sessionId);
+        if (fs.existsSync(dir)) {
+            fs.rmSync(dir, { recursive: true, force: true });
+        }
     } catch (err) {
         console.error(`⚠️ clearAuthSession error [${sessionId}]:`, err.message);
     }
@@ -144,20 +144,7 @@ async function clearAuthSession(sessionId) {
 // Credentials, pre-keys, and signed-pre-keys are intentionally preserved so
 // the device stays registered without re-pairing.
 async function cleanStaleSessionKeys(sessionId) {
-    // 1. Evict from in-memory cache
-    const localCache = authStateCache.get(sessionId);
-    if (localCache) {
-        for (const key of [...localCache.keys()]) {
-            if (
-                key.startsWith('session-') ||
-                key.startsWith('sender-key-') ||
-                key.startsWith('sender-key-memory-')
-            ) {
-                localCache.delete(key);
-            }
-        }
-    }
-    // 2. Delete from MongoDB
+    // 1. Delete from MongoDB
     try {
         const result = await Auth.deleteMany({
             _id: {
@@ -165,143 +152,98 @@ async function cleanStaleSessionKeys(sessionId) {
             }
         });
         if (result.deletedCount > 0) {
-            console.log(`🧹 Wiped ${result.deletedCount} stale Signal session keys for [${sessionId}]`);
+            console.log(`🧹 Wiped ${result.deletedCount} stale Signal session keys from DB for [${sessionId}]`);
         }
     } catch (err) {
-        console.error(`⚠️ cleanStaleSessionKeys error [${sessionId}]:`, err.message);
+        console.error(`⚠️ cleanStaleSessionKeys DB error [${sessionId}]:`, err.message);
+    }
+    // 2. Delete from local filesystem
+    try {
+        const dir = path.join(process.cwd(), 'auth_states', sessionId);
+        if (fs.existsSync(dir)) {
+            const files = fs.readdirSync(dir);
+            for (const file of files) {
+                if (
+                    file.startsWith('session-') ||
+                    file.startsWith('sender-key-') ||
+                    file.startsWith('sender-key-memory-')
+                ) {
+                    fs.unlinkSync(path.join(dir, file));
+                }
+            }
+        }
+    } catch (err) {
+        console.error(`⚠️ cleanStaleSessionKeys file error [${sessionId}]:`, err.message);
     }
 }
 
 async function useMongoDBAuthState(sessionId = 'creds') {
-    if (!authStateCache.has(sessionId)) {
-        authStateCache.set(sessionId, new Map());
+    const dir = path.join(process.cwd(), 'auth_states', sessionId);
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
     }
-    const localCache = authStateCache.get(sessionId);
 
-    const writeData = async (data, id) => {
-        localCache.set(id, data);
-        try {
-            await Auth.updateOne(
-                { _id: `${sessionId}-${id}` },
-                { $set: { data: JSON.stringify(data, BufferJSON.replacer) } },
-                { upsert: true }
-            );
-        } catch (err) {
-            console.error(`⚠️ Auth writeData error [${sessionId}-${id}]:`, err.message);
-        }
-    };
-
-    const readData = async (id) => {
-        if (localCache.has(id)) return localCache.get(id);
-        try {
-            const doc = await Auth.findOne({ _id: `${sessionId}-${id}` }).lean();
-            if (doc && doc.data) {
-                const parsed = JSON.parse(doc.data, BufferJSON.reviver);
-                localCache.set(id, parsed);
-                return parsed;
+    // Download from MongoDB to local disk if local files don't exist yet
+    // or to sync up with MongoDB on restart
+    try {
+        const docs = await Auth.find({ _id: { $regex: `^${sessionId}-` } }).lean();
+        for (const doc of docs) {
+            const filename = doc._id.substring(sessionId.length + 1);
+            const fileBase = filename === 'creds' ? 'creds' : filename;
+            const filePath = path.join(dir, `${fileBase}.json`);
+            if (!fs.existsSync(filePath)) {
+                fs.writeFileSync(filePath, doc.data);
             }
-        } catch (err) {
-            console.error(`⚠️ Auth readData error [${sessionId}-${id}]:`, err.message);
         }
-        return null;
-    };
+    } catch (err) {
+        console.error(`⚠️ useMongoDBAuthState download error [${sessionId}]:`, err.message);
+    }
 
-    const removeData = async (id) => {
-        localCache.delete(id);
-        try {
-            await Auth.deleteOne({ _id: `${sessionId}-${id}` });
-        } catch (err) {
-            console.error(`⚠️ Auth removeData error [${sessionId}-${id}]:`, err.message);
-        }
-    };
-
-    const creds = (await readData('creds')) || initAuthCreds();
-    localCache.set('creds', creds);
+    // Use native Baileys multi-file auth state on local files
+    const { state, saveCreds: nativeSaveCreds } = await useMultiFileAuthState(dir);
 
     return {
         state: {
-            creds,
+            creds: state.creds,
             keys: {
                 get: async (type, ids) => {
-                    const data = {};
-                    const missingIds = [];
-
-                    for (const id of ids) {
-                        const keyId = `${type}-${id}`;
-                        if (localCache.has(keyId)) {
-                            let value = localCache.get(keyId);
-                            if (type === 'app-state-sync-key' && value) {
-                                value = proto.Message.AppStateSyncKeyData.fromObject(value);
-                            }
-                            data[id] = value;
-                        } else {
-                            missingIds.push(id);
-                        }
-                    }
-
-                    if (missingIds.length > 0) {
-                        try {
-                            const queryIds = missingIds.map(id => `${sessionId}-${type}-${id}`);
-                            const docs = await Auth.find({ _id: { $in: queryIds } }).lean();
-                            const docMap = new Map(docs.map(d => [d._id, d.data]));
-
-                            for (const id of missingIds) {
-                                const fullId = `${sessionId}-${type}-${id}`;
-                                const raw = docMap.get(fullId);
-                                if (raw) {
-                                    let parsed = JSON.parse(raw, BufferJSON.reviver);
-                                    localCache.set(`${type}-${id}`, parsed);
-                                    if (type === 'app-state-sync-key' && parsed) {
-                                        parsed = proto.Message.AppStateSyncKeyData.fromObject(parsed);
-                                    }
-                                    data[id] = parsed;
-                                } else {
-                                    data[id] = null;
-                                }
-                            }
-                        } catch (err) {
-                            console.error(`⚠️ Auth keys.get error [${sessionId}-${type}]:`, err.message);
-                        }
-                    }
-
-                    return data;
+                    return state.keys.get(type, ids);
                 },
                 set: async (data) => {
-                    const bulkOps = [];
+                    await state.keys.set(data);
+                    
+                    // Sync updates/deletes to MongoDB asynchronously
                     for (const category in data) {
                         for (const id in data[category]) {
                             const value = data[category][id];
                             const keyId = `${category}-${id}`;
                             const fullDbId = `${sessionId}-${keyId}`;
-
                             if (value) {
-                                localCache.set(keyId, value);
-                                bulkOps.push({
-                                    updateOne: {
-                                        filter: { _id: fullDbId },
-                                        update: { $set: { data: JSON.stringify(value, BufferJSON.replacer) } },
-                                        upsert: true
-                                    }
-                                });
+                                Auth.updateOne(
+                                    { _id: fullDbId },
+                                    { $set: { data: JSON.stringify(value, BufferJSON.replacer) } },
+                                    { upsert: true }
+                                ).catch(err => console.error(`⚠️ Auth sync set error [${fullDbId}]:`, err.message));
                             } else {
-                                localCache.delete(keyId);
-                                bulkOps.push({ deleteOne: { filter: { _id: fullDbId } } });
+                                Auth.deleteOne({ _id: fullDbId }).catch(err => console.error(`⚠️ Auth sync delete error [${fullDbId}]:`, err.message));
                             }
-                        }
-                    }
-
-                    if (bulkOps.length > 0) {
-                        try {
-                            await Auth.bulkWrite(bulkOps, { ordered: false });
-                        } catch (err) {
-                            console.error(`⚠️ Auth bulkWrite error [${sessionId}]:`, err.message);
                         }
                     }
                 }
             }
         },
-        saveCreds: () => writeData(creds, 'creds'),
-        clearCache: () => localCache.clear()
+        saveCreds: async () => {
+            await nativeSaveCreds();
+            try {
+                await Auth.updateOne(
+                    { _id: `${sessionId}-creds` },
+                    { $set: { data: JSON.stringify(state.creds, BufferJSON.replacer) } },
+                    { upsert: true }
+                );
+            } catch (err) {
+                console.error(`⚠️ Auth sync saveCreds error [${sessionId}]:`, err.message);
+            }
+        }
     };
 }
 
