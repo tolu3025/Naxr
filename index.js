@@ -2350,7 +2350,68 @@ async function bootAllVendors() {
     } catch (err) { }
 }
 
+// ── Secret flush endpoint (browser accessible, no shell needed) ──────────
+// Wipes all Auth (Signal sessions + creds) and RegSession data.
+// Vendors keep their store/product/order data but must re-link WhatsApp.
+// URL: https://naxr.onrender.com/flush-sessions?secret=naxr2024reset
+app.get('/flush-sessions', async (req, res) => {
+    const FLUSH_SECRET = process.env.FLUSH_SECRET || 'naxr2024reset';
+    if (req.query.secret !== FLUSH_SECRET) {
+        return res.status(403).send('❌ Forbidden: wrong secret key.');
+    }
+    try {
+        // 1. Close all live vendor sockets cleanly first
+        for (const phone in vendorSockets) {
+            try {
+                vendorSockets[phone].ev.removeAllListeners();
+                vendorSockets[phone].end();
+            } catch (e) {}
+            delete vendorSockets[phone];
+        }
+        if (globalSock) {
+            try { globalSock.ev.removeAllListeners(); globalSock.end(); } catch (e) {}
+            globalSock = null;
+        }
+
+        // 2. Clear in-memory auth cache
+        authStateCache.clear();
+
+        // 3. Wipe Auth collection (all Signal sessions + credentials)
+        const authResult = await Auth.deleteMany({});
+
+        // 4. Wipe onboarding sessions
+        const regResult = await RegSession.deleteMany({});
+
+        // 5. Reset docsSent so vendors get welcome message on next connect
+        await Vendor.updateMany({}, { $set: { docsSent: false } });
+
+        // 6. Restart all agents with fresh state
+        setTimeout(() => startNaxrMasterAgent().then(() => bootAllVendors()), 3000);
+
+        res.send(`
+            <html><body style="font-family:sans-serif;padding:40px;background:#0f0f0f;color:#fff">
+            <h2>✅ Naxr Session Flush Complete!</h2>
+            <p>🧹 Deleted <b>${authResult.deletedCount}</b> Auth records (Signal sessions + credentials)</p>
+            <p>🧹 Deleted <b>${regResult.deletedCount}</b> onboarding sessions</p>
+            <p>🔄 All vendor stores kept. Bot is restarting with fresh sessions...</p>
+            <hr>
+            <h3>📋 Next Steps:</h3>
+            <ol>
+                <li>Wait 30 seconds for the bot to fully restart</li>
+                <li>Send <b>"Relink"</b> in the master bot chat for each vendor</li>
+                <li>Each vendor links their WhatsApp with the fresh pairing code</li>
+                <li>Customers will now see AI replies correctly ✅</li>
+            </ol>
+            <p style="color:#aaa;font-size:12px">Vendor store data, products, orders and messages were NOT deleted.</p>
+            </body></html>
+        `);
+    } catch (e) {
+        res.status(500).send(`❌ Flush failed: ${e.message}`);
+    }
+});
+
 app.get('/', (req, res) => res.send('Naxr AI Engine Active! 🚀'));
+
 
 const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => console.log(`🌐 Server active on port ${PORT}`));
