@@ -125,42 +125,149 @@ const Knowledge = mongoose.model('Knowledge', new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 }));
 
+// In-memory cache per session to avoid redundant MongoDB reads and reduce
+// Signal session mismatches caused by stale DB reads on Render restarts.
+const authStateCache = new Map();
+
+async function clearAuthSession(sessionId) {
+    authStateCache.delete(sessionId);
+    try {
+        await Auth.deleteMany({ _id: { $regex: `^${sessionId}` } });
+    } catch (err) {
+        console.error(`⚠️ clearAuthSession error [${sessionId}]:`, err.message);
+    }
+}
+
 async function useMongoDBAuthState(sessionId = 'creds') {
+    if (!authStateCache.has(sessionId)) {
+        authStateCache.set(sessionId, new Map());
+    }
+    const localCache = authStateCache.get(sessionId);
+
     const writeData = async (data, id) => {
-        await Auth.updateOne({ _id: `${sessionId}-${id}` }, { $set: { data: JSON.stringify(data, BufferJSON.replacer) } }, { upsert: true });
+        localCache.set(id, data);
+        try {
+            await Auth.updateOne(
+                { _id: `${sessionId}-${id}` },
+                { $set: { data: JSON.stringify(data, BufferJSON.replacer) } },
+                { upsert: true }
+            );
+        } catch (err) {
+            console.error(`⚠️ Auth writeData error [${sessionId}-${id}]:`, err.message);
+        }
     };
+
     const readData = async (id) => {
-        const doc = await Auth.findOne({ _id: `${sessionId}-${id}` });
-        return doc && doc.data ? JSON.parse(doc.data, BufferJSON.reviver) : null;
+        if (localCache.has(id)) return localCache.get(id);
+        try {
+            const doc = await Auth.findOne({ _id: `${sessionId}-${id}` }).lean();
+            if (doc && doc.data) {
+                const parsed = JSON.parse(doc.data, BufferJSON.reviver);
+                localCache.set(id, parsed);
+                return parsed;
+            }
+        } catch (err) {
+            console.error(`⚠️ Auth readData error [${sessionId}-${id}]:`, err.message);
+        }
+        return null;
     };
-    const removeData = async (id) => { await Auth.deleteOne({ _id: `${sessionId}-${id}` }); };
-    const creds = await readData('creds') || initAuthCreds();
+
+    const removeData = async (id) => {
+        localCache.delete(id);
+        try {
+            await Auth.deleteOne({ _id: `${sessionId}-${id}` });
+        } catch (err) {
+            console.error(`⚠️ Auth removeData error [${sessionId}-${id}]:`, err.message);
+        }
+    };
+
+    const creds = (await readData('creds')) || initAuthCreds();
+    localCache.set('creds', creds);
 
     return {
         state: {
-            creds, keys: {
+            creds,
+            keys: {
                 get: async (type, ids) => {
                     const data = {};
-                    await Promise.all(ids.map(async id => {
-                        let value = await readData(`${type}-${id}`);
-                        if (type === 'app-state-sync-key' && value) value = proto.Message.AppStateSyncKeyData.fromObject(value);
-                        data[id] = value;
-                    }));
+                    const missingIds = [];
+
+                    for (const id of ids) {
+                        const keyId = `${type}-${id}`;
+                        if (localCache.has(keyId)) {
+                            let value = localCache.get(keyId);
+                            if (type === 'app-state-sync-key' && value) {
+                                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                            }
+                            data[id] = value;
+                        } else {
+                            missingIds.push(id);
+                        }
+                    }
+
+                    if (missingIds.length > 0) {
+                        try {
+                            const queryIds = missingIds.map(id => `${sessionId}-${type}-${id}`);
+                            const docs = await Auth.find({ _id: { $in: queryIds } }).lean();
+                            const docMap = new Map(docs.map(d => [d._id, d.data]));
+
+                            for (const id of missingIds) {
+                                const fullId = `${sessionId}-${type}-${id}`;
+                                const raw = docMap.get(fullId);
+                                if (raw) {
+                                    let parsed = JSON.parse(raw, BufferJSON.reviver);
+                                    localCache.set(`${type}-${id}`, parsed);
+                                    if (type === 'app-state-sync-key' && parsed) {
+                                        parsed = proto.Message.AppStateSyncKeyData.fromObject(parsed);
+                                    }
+                                    data[id] = parsed;
+                                } else {
+                                    data[id] = null;
+                                }
+                            }
+                        } catch (err) {
+                            console.error(`⚠️ Auth keys.get error [${sessionId}-${type}]:`, err.message);
+                        }
+                    }
+
                     return data;
                 },
                 set: async (data) => {
-                    const tasks = [];
+                    const bulkOps = [];
                     for (const category in data) {
                         for (const id in data[category]) {
                             const value = data[category][id];
-                            tasks.push(value ? writeData(value, `${category}-${id}`) : removeData(`${category}-${id}`));
+                            const keyId = `${category}-${id}`;
+                            const fullDbId = `${sessionId}-${keyId}`;
+
+                            if (value) {
+                                localCache.set(keyId, value);
+                                bulkOps.push({
+                                    updateOne: {
+                                        filter: { _id: fullDbId },
+                                        update: { $set: { data: JSON.stringify(value, BufferJSON.replacer) } },
+                                        upsert: true
+                                    }
+                                });
+                            } else {
+                                localCache.delete(keyId);
+                                bulkOps.push({ deleteOne: { filter: { _id: fullDbId } } });
+                            }
                         }
                     }
-                    await Promise.all(tasks);
+
+                    if (bulkOps.length > 0) {
+                        try {
+                            await Auth.bulkWrite(bulkOps, { ordered: false });
+                        } catch (err) {
+                            console.error(`⚠️ Auth bulkWrite error [${sessionId}]:`, err.message);
+                        }
+                    }
                 }
             }
         },
-        saveCreds: () => writeData(creds, 'creds')
+        saveCreds: () => writeData(creds, 'creds'),
+        clearCache: () => localCache.clear()
     };
 }
 
@@ -457,7 +564,19 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
         printQRInTerminal: false,
         browser: ["Mac OS", "Safari", "17.0.0"],
         syncFullHistory: false,
-        keepAliveIntervalMs: 30000
+        keepAliveIntervalMs: 30000,
+        // Provide message history so Baileys can retry-decrypt missed messages
+        getMessage: async (key) => {
+            try {
+                const jidNum = cleanPhoneNumber(key.remoteJid || '');
+                const stored = await Message.findOne({
+                    vendorPhone: cleanPhone,
+                    customerPhone: jidNum
+                }).sort({ timestamp: -1 }).lean();
+                if (stored) return { conversation: stored.text };
+            } catch (e) { }
+            return { conversation: '' };
+        }
     });
 
     vendorSockets[cleanPhone] = vendorSock;
@@ -554,7 +673,8 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     vendorSockets[cleanPhone].ev.removeAllListeners('connection.update');
                     delete vendorSockets[cleanPhone];
                 }
-                await Auth.deleteMany({ _id: { $regex: `^vendor_${cleanPhone}` } });
+                // Clear both DB and in-memory cache to force a clean re-auth
+                await clearAuthSession(`vendor_${cleanPhone}`);
                 return;
             }
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
@@ -565,6 +685,8 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 
     vendorSock.ev.on('messages.upsert', async (m) => {
         if (m.type !== 'notify' && m.type !== 'append') return;
+        // Filter out encrypted noise from WhatsApp's internal @lid linked-device JIDs
+        m.messages = m.messages.filter(msg => !msg.key?.remoteJid?.endsWith('@lid') || msg.message);
 
         for (const msg of m.messages) {
             try {
@@ -1200,7 +1322,18 @@ async function startNaxrMasterAgent(isReconnect = false) {
         printQRInTerminal: false,
         browser: ["Mac OS", "Safari", "17.0.0"],
         syncFullHistory: false,
-        keepAliveIntervalMs: 30000
+        keepAliveIntervalMs: 30000,
+        // Provide getMessage so Baileys can retry-decrypt messages after reconnect
+        getMessage: async (key) => {
+            try {
+                const jidNum = cleanPhoneNumber(key.remoteJid || '');
+                const stored = await Message.findOne({
+                    customerPhone: jidNum
+                }).sort({ timestamp: -1 }).lean();
+                if (stored) return { conversation: stored.text };
+            } catch (e) { }
+            return { conversation: '' };
+        }
     });
 
     globalSock = sock;
@@ -1230,6 +1363,8 @@ async function startNaxrMasterAgent(isReconnect = false) {
 
     sock.ev.on('messages.upsert', async (m) => {
         if (m.type !== 'notify' && m.type !== 'append') return;
+        // Filter out @lid linked-device JID noise that triggers decrypt errors
+        m.messages = m.messages.filter(msg => !msg.key?.remoteJid?.endsWith('@lid') || msg.message);
 
         for (const msg of m.messages) {
             try {
@@ -1751,7 +1886,7 @@ app.get('/api/admin/reset-session', async (req, res) => {
             try { globalSock.ws.close(); } catch (e) { }
             globalSock = null;
         }
-        await Auth.deleteMany({ _id: { $regex: '^master_agent_session' } });
+        await clearAuthSession('master_agent_session');
         startNaxrMasterAgent();
         res.json({ message: "Admin master agent session reset. Check console logs or call /api/admin/pair-code for new pairing code." });
     } catch (e) {
