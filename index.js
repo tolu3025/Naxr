@@ -1537,7 +1537,12 @@ async function startNaxrMasterAgent(isReconnect = false) {
                             delete vendorSockets[targetPhone];
                             await delay(1500);
                         }
-                        await Auth.deleteMany({ _id: { $regex: `^vendor_${targetPhone}` } });
+                        // Flush both MongoDB AND in-memory cache so the new socket
+                        // starts with completely fresh Signal sessions. Without this,
+                        // stale sessions in the in-memory cache cause the bot to encrypt
+                        // replies with old keys → customer sees "Waiting for this message."
+                        await clearAuthSession(`vendor_${targetPhone}`);
+                        await cleanStaleSessionKeys(`vendor_${targetPhone}`);
 
                         const newCode = await spawnVendorAgent(targetPhone, existingVendor.storeName, true);
 
