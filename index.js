@@ -102,6 +102,7 @@ const Message = mongoose.model('Message', new mongoose.Schema({
     text: { type: String, required: true },
     fromMe: { type: Boolean, required: true },
     isAi: { type: Boolean, default: false },
+    messageId: String,
     timestamp: { type: Date, default: Date.now }
 }));
 
@@ -423,7 +424,8 @@ async function safeSendMessage(sock, jid, content, options = {}) {
                 await sock.sendPresenceUpdate('paused', jid);
             } catch (e) {}
 
-            const sent = await sock.sendMessage(jid, content, options);
+            const sendFunc = sock.originalSendMessage || sock.sendMessage;
+            const sent = await sendFunc.bind(sock)(jid, content, options);
             if (sent?.key?.id) {
                 botMessageIds.add(sent.key.id);
                 if (botMessageIds.size > 3000) {
@@ -432,7 +434,10 @@ async function safeSendMessage(sock, jid, content, options = {}) {
                 }
                 
                 try {
-                    const vendorPhone = Object.keys(vendorSockets).find(phone => vendorSockets[phone] === sock);
+                    let vendorPhone = Object.keys(vendorSockets).find(phone => vendorSockets[phone] === sock);
+                    if (!vendorPhone && sock === globalSock) {
+                        vendorPhone = 'master_agent';
+                    }
                     if (vendorPhone && jid && jid.endsWith('@s.whatsapp.net')) {
                         const customerPhone = cleanPhoneNumber(jid);
                         const text = content.text || content.caption || "";
@@ -442,7 +447,8 @@ async function safeSendMessage(sock, jid, content, options = {}) {
                                 customerPhone,
                                 text,
                                 fromMe: true,
-                                isAi: !options.manual
+                                isAi: !options.manual,
+                                messageId: sent.key.id
                             });
                             if (typeof notifyVendorClients === 'function') {
                                 notifyVendorClients(vendorPhone, 'ai_replied', {
@@ -604,11 +610,17 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
         // Provide message history so Baileys can retry-decrypt missed messages
         getMessage: async (key) => {
             try {
-                const jidNum = cleanPhoneNumber(key.remoteJid || '');
-                const stored = await Message.findOne({
+                let stored = await Message.findOne({
                     vendorPhone: cleanPhone,
-                    customerPhone: jidNum
-                }).sort({ timestamp: -1 }).lean();
+                    messageId: key.id
+                }).lean();
+                if (!stored) {
+                    const jidNum = cleanPhoneNumber(key.remoteJid || '');
+                    stored = await Message.findOne({
+                        vendorPhone: cleanPhone,
+                        customerPhone: jidNum
+                    }).sort({ timestamp: -1 }).lean();
+                }
                 if (stored) return { conversation: stored.text };
             } catch (e) { }
             return { conversation: '' };
@@ -617,6 +629,12 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
 
     vendorSockets[cleanPhone] = vendorSock;
     vendorSock.ev.on('creds.update', saveCreds);
+
+    // Wrap sendMessage to route through typing indicator, queue, and DB logger
+    vendorSock.originalSendMessage = vendorSock.sendMessage;
+    vendorSock.sendMessage = (jid, content, options = {}) => {
+        return safeSendMessage(vendorSock, jid, content, options);
+    };
 
     vendorSock.ev.on('messaging-history.set', async ({ chats, messages, contacts, isLatest }) => {
         try {
@@ -639,6 +657,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         text: textMessage,
                         fromMe: !!msg.key.fromMe,
                         isAi: false,
+                        messageId: msg.key.id,
                         timestamp: new Date((msg.messageTimestamp * 1000) || Date.now())
                     });
                 }
@@ -776,7 +795,8 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         customerPhone: cleanRemoteJidNumber,
                         text: textMessage || (isImage ? "[Image]" : "[Media]"),
                         fromMe: isFromMe,
-                        isAi: false
+                        isAi: false,
+                        messageId: msg.key.id
                     });
                     if (typeof notifyVendorClients === 'function') {
                         notifyVendorClients(cleanVendorPhone, 'new_message', {
@@ -1380,10 +1400,17 @@ async function startNaxrMasterAgent(isReconnect = false) {
         // Provide getMessage so Baileys can retry-decrypt messages after reconnect
         getMessage: async (key) => {
             try {
-                const jidNum = cleanPhoneNumber(key.remoteJid || '');
-                const stored = await Message.findOne({
-                    customerPhone: jidNum
-                }).sort({ timestamp: -1 }).lean();
+                let stored = await Message.findOne({
+                    vendorPhone: 'master_agent',
+                    messageId: key.id
+                }).lean();
+                if (!stored) {
+                    const jidNum = cleanPhoneNumber(key.remoteJid || '');
+                    stored = await Message.findOne({
+                        vendorPhone: 'master_agent',
+                        customerPhone: jidNum
+                    }).sort({ timestamp: -1 }).lean();
+                }
                 if (stored) return { conversation: stored.text };
             } catch (e) { }
             return { conversation: '' };
@@ -1392,6 +1419,12 @@ async function startNaxrMasterAgent(isReconnect = false) {
 
     globalSock = sock;
     sock.ev.on('creds.update', saveCreds);
+
+    // Wrap sendMessage to route through typing indicator, queue, and DB logger
+    sock.originalSendMessage = sock.sendMessage;
+    sock.sendMessage = (jid, content, options = {}) => {
+        return safeSendMessage(sock, jid, content, options);
+    };
 
     if (!sock.authState.creds.registered && !isReconnect) {
         await delay(4000);
@@ -1431,9 +1464,21 @@ async function startNaxrMasterAgent(isReconnect = false) {
                 const isImage = !!(msg.message.imageMessage || msg.message.ephemeralMessage?.message?.imageMessage);
                 let textMessage = extractMessageText(msg);
 
+                const cleanRemoteJidNumber = cleanPhoneNumber(remoteJid);
+                const isFromMe = !!msg.key.fromMe;
+
+                // Log all incoming messages for master agent to database
+                await Message.create({
+                    vendorPhone: 'master_agent',
+                    customerPhone: cleanRemoteJidNumber,
+                    text: textMessage || (isImage ? "[Image]" : "[Media]"),
+                    fromMe: isFromMe,
+                    isAi: false,
+                    messageId: msg.key.id
+                }).catch(() => {});
+
                 const lowerText = textMessage ? textMessage.toLowerCase().trim() : "";
                 const cleanText = lowerText.replace(/[^\w\s]/gi, '').trim();
-                const cleanRemoteJidNumber = cleanPhoneNumber(remoteJid);
                 const cleanAdminPhone = cleanPhoneNumber(ADMIN_PHONE);
 
                 const isAdminMessage = cleanRemoteJidNumber === cleanAdminPhone || remoteJid.includes(cleanAdminPhone) || msg.key.fromMe;
