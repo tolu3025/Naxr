@@ -679,7 +679,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                         `────────────────────────────\n` +
                         `1️⃣ *Automated Catalog:* Customers can ask for your catalog, and the AI will auto-send your product pictures and prices.\n` +
                         `2️⃣ *Virtual Accounts (Anti-Fraud):* Instead of links, Naxr generates a direct **Virtual Bank Account** for every transaction. Fake screenshots won't work anymore—the AI verifies payments instantly via Flutterwave and wires the money to you!\n\n` +
-                        `🛍️ ️ *MANAGE YOUR STORE DIRECTLY HERE*\n` +
+                        `🛍️ ️ *MANAGE YOUR STORE DIRECTLY HERE*\n` +
                         `Message yourself (this chat) with these commands:\n` +
                         `• *stats* - View your total sales.\n` +
                         `• *analytics* - Detailed breakdown of orders & revenue.\n` +
@@ -696,6 +696,21 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
                     await vendorData.save();
                 }
             } catch (e) { }
+
+            // ── Sender-key warmup ──────────────────────────────────────────
+            // When the AI bot (linked device) sends a message, WhatsApp also
+            // sends an encrypted sync copy to the vendor's primary phone.
+            // If the sender-key hasn't been distributed yet, the vendor sees
+            // "Waiting for this message." Subscribing to our own presence
+            // triggers WhatsApp to distribute the bot's sender-key to all of
+            // the vendor's registered devices, fixing this issue.
+            setTimeout(async () => {
+                try {
+                    const selfJid = `${cleanPhone}@s.whatsapp.net`;
+                    await vendorSock.subscribePresenceUpdates(selfJid);
+                    await vendorSock.sendPresenceUpdate('available', selfJid);
+                } catch (e) { }
+            }, 5000);
         }
 
         if (connection === 'close') {
@@ -718,6 +733,7 @@ async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
             if (shouldReconnect) setTimeout(() => spawnVendorAgent(cleanPhone, storeName, false), statusCode === 515 ? 1000 : 5000);
         }
     });
+
 
     vendorSock.ev.on('messages.upsert', async (m) => {
         if (m.type !== 'notify' && m.type !== 'append') return;
