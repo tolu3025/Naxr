@@ -2039,7 +2039,9 @@ app.get('/api/vendor/:phone/settings', checkAuth, async (req, res) => {
             deliveryInfo: vendor.deliveryInfo,
             aiActive: vendor.aiActive,
             allowNegotiation: vendor.allowNegotiation,
-            maxDiscountPercent: vendor.maxDiscountPercent
+            maxDiscountPercent: vendor.maxDiscountPercent,
+            whatsappPhoneNumberId: vendor.whatsappPhoneNumberId || "",
+            whatsappAccessToken: vendor.whatsappAccessToken || ""
         });
     } catch (e) {
         return res.status(500).json({ error: e.message });
@@ -2051,11 +2053,13 @@ app.post('/api/vendor/:phone/settings', checkAuth, async (req, res) => {
         const phone = req.params.phone;
         if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized access" });
 
-        const { response_mode, allowNegotiation, maxDiscountPercent } = req.body;
+        const { response_mode, allowNegotiation, maxDiscountPercent, whatsappPhoneNumberId, whatsappAccessToken } = req.body;
         const updates = {};
         if (response_mode !== undefined) updates.aiActive = (response_mode === "auto");
         if (allowNegotiation !== undefined) updates.allowNegotiation = allowNegotiation;
         if (maxDiscountPercent !== undefined) updates.maxDiscountPercent = maxDiscountPercent;
+        if (whatsappPhoneNumberId !== undefined) updates.whatsappPhoneNumberId = whatsappPhoneNumberId;
+        if (whatsappAccessToken !== undefined) updates.whatsappAccessToken = whatsappAccessToken;
 
         const vendor = await Vendor.findOneAndUpdate({ phoneNumber: phone }, updates, { new: true });
         if (!vendor) return res.status(404).json({ error: "Vendor not found" });

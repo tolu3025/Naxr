@@ -18,6 +18,8 @@ class VendorStore extends ChangeNotifier {
 
   bool _allowNegotiation = false;
   int _maxDiscountPercent = 0;
+  String _whatsappPhoneNumberId = '';
+  String _whatsappAccessToken = '';
 
   String? get phone => _phone;
   int get chatRefreshCount => _chatRefreshCount;
@@ -32,6 +34,8 @@ class VendorStore extends ChangeNotifier {
 
   bool get allowNegotiation => _allowNegotiation;
   int get maxDiscountPercent => _maxDiscountPercent;
+  String get whatsappPhoneNumberId => _whatsappPhoneNumberId;
+  String get whatsappAccessToken => _whatsappAccessToken;
 
   String? _token;
   String? get token => _token;
@@ -160,6 +164,8 @@ class VendorStore extends ChangeNotifier {
       final data = jsonDecode(response.body);
       _allowNegotiation = data['allowNegotiation'] == true;
       _maxDiscountPercent = data['maxDiscountPercent'] ?? 0;
+      _whatsappPhoneNumberId = data['whatsappPhoneNumberId'] ?? '';
+      _whatsappAccessToken = data['whatsappAccessToken'] ?? '';
       notifyListeners();
       return data;
     } else {
@@ -185,6 +191,26 @@ class VendorStore extends ChangeNotifier {
     } else {
       final data = jsonDecode(response.body);
       throw Exception(data['error'] ?? 'Failed to save settings');
+    }
+  }
+
+  Future<void> saveWhatsAppCredentials(String phoneId, String token) async {
+    if (_phone == null) return;
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/vendor/$_phone/settings'),
+      headers: _headers,
+      body: jsonEncode({
+        'whatsappPhoneNumberId': phoneId,
+        'whatsappAccessToken': token,
+      }),
+    );
+    if (response.statusCode == 200) {
+      _whatsappPhoneNumberId = phoneId;
+      _whatsappAccessToken = token;
+      notifyListeners();
+    } else {
+      final data = jsonDecode(response.body);
+      throw Exception(data['error'] ?? 'Failed to save WhatsApp settings');
     }
   }
 

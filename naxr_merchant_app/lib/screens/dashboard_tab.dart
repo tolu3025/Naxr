@@ -433,95 +433,164 @@ class _DashboardTabState extends State<DashboardTab> {
   }
 
   void _handleShowPairingCodeDialog(BuildContext context, VendorStore store) {
+    final phoneIdController = TextEditingController();
+    final tokenController = TextEditingController();
+
     showDialog(
       context: context,
-      barrierDismissible: false,
+      barrierDismissible: true,
       builder: (context) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return FutureBuilder<String>(
-              future: store.fetchPairingCode(),
-              builder: (context, snapshot) {
-                final isLoading = snapshot.connectionState == ConnectionState.waiting;
-                final isError = snapshot.hasError;
-                final code = snapshot.data ?? '';
+        return FutureBuilder<Map<String, dynamic>>(
+          future: store.fetchSettings(),
+          builder: (context, snapshot) {
+            final isLoading = snapshot.connectionState == ConnectionState.waiting;
+            if (!isLoading && snapshot.hasData) {
+              phoneIdController.text = snapshot.data?['whatsappPhoneNumberId'] ?? '';
+              tokenController.text = snapshot.data?['whatsappAccessToken'] ?? '';
+            }
+
+            return StatefulBuilder(
+              builder: (context, setDialogState) {
+                bool isSaving = false;
+                
+                void handleSave() async {
+                  if (phoneIdController.text.trim().isEmpty || tokenController.text.trim().isEmpty) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Please fill in both Phone ID and Token.')),
+                    );
+                    return;
+                  }
+
+                  setDialogState(() {
+                    isSaving = true;
+                  });
+                  try {
+                    await store.saveWhatsAppCredentials(
+                      phoneIdController.text.trim(),
+                      tokenController.text.trim(),
+                    );
+                    Navigator.pop(context);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('WhatsApp credentials updated successfully!')),
+                    );
+                  } catch (e) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(content: Text('Failed to save: $e')),
+                    );
+                  } finally {
+                    setDialogState(() {
+                      isSaving = false;
+                    });
+                  }
+                }
 
                 return AlertDialog(
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  title: Row(
+                  title: const Row(
                     children: [
-                      Icon(
-                        isError ? Icons.error_outline : (isLoading ? Icons.hourglass_top : Icons.link),
-                        color: isError ? Colors.red : AppTheme.primaryGreen,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(isError ? 'Pairing Failed' : (isLoading ? 'Generating Code...' : 'Link WhatsApp')),
+                      Icon(Icons.settings_input_component, color: AppTheme.primaryGreen),
+                      SizedBox(width: 8),
+                      Text('Link WhatsApp API', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
                     ],
                   ),
-                  content: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      if (isLoading) ...[
-                        const SizedBox(height: 16),
-                        const Center(child: CircularProgressIndicator(color: AppTheme.primaryGreen)),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'Naxr is resetting your session keys and requesting a secure WhatsApp pairing code. This takes about 10-15 seconds...',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(fontSize: 13, color: AppTheme.textMuted),
-                        ),
-                      ] else if (isError) ...[
-                        Text(
-                          'Could not generate pairing code:\n${snapshot.error}',
-                          style: const TextStyle(color: Colors.red, fontSize: 14),
-                        ),
-                      ] else ...[
-                        const Text(
-                          'Your WhatsApp pairing code is:',
-                          style: TextStyle(fontSize: 14, color: AppTheme.secondaryDark),
-                        ),
-                        const SizedBox(height: 12),
-                        Container(
-                          padding: const EdgeInsets.symmetric(vertical: 12),
-                          decoration: BoxDecoration(
-                            color: Colors.grey.shade100,
-                            borderRadius: BorderRadius.circular(8),
-                            border: Border.all(color: Colors.grey.shade300),
-                          ),
-                          child: Center(
-                            child: SelectableText(
-                              code,
-                              style: const TextStyle(
-                                fontSize: 24,
-                                fontWeight: FontWeight.bold,
-                                letterSpacing: 2.0,
-                                color: AppTheme.primaryGreen,
+                  content: isLoading
+                      ? const SizedBox(
+                          height: 100,
+                          child: Center(child: CircularProgressIndicator(color: AppTheme.primaryGreen)),
+                        )
+                      : SingleChildScrollView(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              const Text(
+                                'Provide your WhatsApp Business Cloud API details below to connect your AI agent.',
+                                style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
                               ),
-                            ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Phone Number ID',
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.secondaryDark),
+                              ),
+                              const SizedBox(height: 6),
+                              TextField(
+                                controller: phoneIdController,
+                                decoration: const InputDecoration(
+                                  hintText: 'e.g. 1208644078993009',
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Permanent Access Token',
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.secondaryDark),
+                              ),
+                              const SizedBox(height: 6),
+                              TextField(
+                                controller: tokenController,
+                                maxLines: 3,
+                                decoration: const InputDecoration(
+                                  hintText: 'Paste access token here...',
+                                  contentPadding: EdgeInsets.all(12),
+                                ),
+                              ),
+                              const SizedBox(height: 20),
+                              const Text(
+                                'Configuration Details:',
+                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.secondaryDark),
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Colors.grey.shade50,
+                                  borderRadius: BorderRadius.circular(8),
+                                  border: Border.all(color: Colors.grey.shade100),
+                                ),
+                                child: const Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      'Callback URL:',
+                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                                    ),
+                                    SelectableText(
+                                      'https://naxr.onrender.com/webhook/whatsapp',
+                                      style: TextStyle(fontSize: 10, color: Colors.blue),
+                                    ),
+                                    SizedBox(height: 6),
+                                    Text(
+                                      'Verify Token:',
+                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
+                                    ),
+                                    SelectableText(
+                                      'naxr_verify_token',
+                                      style: TextStyle(fontSize: 10, color: Colors.blue),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                        const SizedBox(height: 16),
-                        const Text(
-                          'How to link:',
-                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppTheme.secondaryDark),
-                        ),
-                        const SizedBox(height: 8),
-                        const Text(
-                          '1. Open WhatsApp on your phone.\n'
-                          '2. Tap Settings > Linked Devices > Link a Device.\n'
-                          '3. Select "Link with phone number instead".\n'
-                          '4. Enter the 8-character code shown above.',
-                          style: TextStyle(fontSize: 12, height: 1.4, color: AppTheme.textMuted),
-                        ),
-                      ]
-                    ],
-                  ),
                   actions: [
+                    TextButton(
+                      onPressed: isSaving ? null : () => Navigator.pop(context),
+                      child: const Text('Cancel'),
+                    ),
                     if (!isLoading)
-                      TextButton(
-                        onPressed: () => Navigator.pop(context),
-                        child: const Text('Close'),
+                      ElevatedButton(
+                        onPressed: isSaving ? null : handleSave,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppTheme.primaryGreen,
+                        ),
+                        child: isSaving
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                              )
+                            : const Text('Save Credentials'),
                       ),
                   ],
                 );
