@@ -1551,10 +1551,10 @@ app.get('/webhook/whatsapp', (req, res) => {
     }
 });
 
-app.post('/webhook/whatsapp', async (req, res) => {
+app.post('/webhook/whatsapp', express.json(), async (req, res) => {
     res.sendStatus(200);
 
-    const body = req.body;
+    const body = req.body || {};
     if (body.object !== 'whatsapp_business_account') return;
 
     try {
