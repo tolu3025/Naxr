@@ -495,185 +495,31 @@ function cleanPhoneNumber(rawPhone) {
 // ----------------------------------------------------
 // 4. SPAWN DEDICATED VENDOR INSTANCE
 // ----------------------------------------------------
+
 async function spawnVendorAgent(realPhone, storeName, requestNewCode = false) {
-    const cleanPhone = cleanPhoneNumber(realPhone);
-    if (!cleanPhone) return null;
+    console.log(`ℹ️ spawnVendorAgent called for ${realPhone} (No-op in WhatsApp Cloud API mode)`);
+    return "ALREADY_ACTIVE";
+}
 
-    if (vendorSockets[cleanPhone]) {
-        const sock = vendorSockets[cleanPhone];
-        if (sock.authState.creds.registered) return "ALREADY_ACTIVE";
-        if (requestNewCode) {
-            try { return await sock.requestPairingCode(cleanPhone); }
-            catch (err) { return "ERROR"; }
-        }
-        return null;
+async function handleVendorAgentMessage(cleanPhone, msg) {
+    const cleanVendorPhone = cleanPhone;
+    const vendor = await Vendor.findOne({ phoneNumber: cleanPhone });
+    if (!vendor) {
+        console.log(`⚠️ handleVendorAgentMessage: Vendor record not found for ${cleanPhone}`);
+        return;
     }
+    const storeName = vendor.storeName;
+    const vendorBank = vendor.bankDetails || "";
+    const paymentPolicy = vendor.paymentPolicy || "UPFRONT";
 
-    // Clean stale Signal sessions every fresh boot to prevent Bad MAC / MessageCounterError
-    await cleanStaleSessionKeys(`vendor_${cleanPhone}`);
-
-    const { state, saveCreds } = await useMongoDBAuthState(`vendor_${cleanPhone}`);
-
-    const vendorSock = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'error' }),
-        printQRInTerminal: false,
-        browser: ["Mac OS", "Safari", "17.0.0"],
-        syncFullHistory: false,
-        keepAliveIntervalMs: 30000,
-        // Provide message history so Baileys can retry-decrypt missed messages
-        getMessage: async (key) => {
-            try {
-                let stored = await Message.findOne({
-                    vendorPhone: cleanPhone,
-                    messageId: key.id
-                }).lean();
-                if (!stored) {
-                    const jidNum = cleanPhoneNumber(key.remoteJid || '');
-                    stored = await Message.findOne({
-                        vendorPhone: cleanPhone,
-                        customerPhone: jidNum
-                    }).sort({ timestamp: -1 }).lean();
-                }
-                if (stored) return { conversation: stored.text };
-            } catch (e) { }
-            return { conversation: '' };
+    const vendorSock = {
+        sendMessage: (jid, content, options = {}) => {
+            return safeSendMessage(cleanPhone, jid, content, options);
         }
-    });
-
-    vendorSockets[cleanPhone] = vendorSock;
-    vendorSock.ev.on('creds.update', saveCreds);
-
-    // Wrap sendMessage to route through typing indicator, queue, and DB logger
-    vendorSock.originalSendMessage = vendorSock.sendMessage;
-    vendorSock.sendMessage = (jid, content, options = {}) => {
-        return safeSendMessage(vendorSock, jid, content, options);
     };
 
-    vendorSock.ev.on('messaging-history.set', async ({ chats, messages, contacts, isLatest }) => {
-        try {
-            console.log(`📥 Syncing WhatsApp chat history for ${cleanPhone} (${messages.length} messages)...Limit 50 to prevent overflow.`);
-            // Sync up to 50 recent messages to populate the inbox instantly without hitting rate limits
-            const sliceMsg = messages.slice(-50);
-            for (const msg of sliceMsg) {
-                if (!msg.message) continue;
-                const remoteJid = msg.key.remoteJid;
-                if (!remoteJid || remoteJid.endsWith('@g.us') || remoteJid === 'status@broadcast' || remoteJid.endsWith('@newsletter')) continue;
-                const cleanRemoteJidNumber = cleanPhoneNumber(remoteJid);
-                if (cleanRemoteJidNumber === cleanPhone) continue;
-                const textMessage = extractMessageText(msg);
-                if (!textMessage) continue;
-                const existing = await Message.findOne({ vendorPhone: cleanPhone, customerPhone: cleanRemoteJidNumber, text: textMessage });
-                if (!existing) {
-                    await Message.create({
-                        vendorPhone: cleanPhone,
-                        customerPhone: cleanRemoteJidNumber,
-                        text: textMessage,
-                        fromMe: !!msg.key.fromMe,
-                        isAi: false,
-                        messageId: msg.key.id,
-                        timestamp: new Date((msg.messageTimestamp * 1000) || Date.now())
-                    });
-                }
-            }
-            console.log(`✅ Chat history sync complete for ${cleanPhone}!`);
-        } catch (e) {
-            console.error(`⚠️ History sync error for ${cleanPhone}:`, e.message);
-        }
-    });
-
-    let pairingCode = null;
-    if (!vendorSock.authState.creds.registered && requestNewCode) {
-        await delay(3000);
-        try {
-            pairingCode = await vendorSock.requestPairingCode(cleanPhone);
-            console.log(`\n🔑 VALID VENDOR PAIRING CODE FOR ${storeName} (${cleanPhone}): ${pairingCode}\n`);
-        } catch (err) { pairingCode = "ERROR"; }
-    } else if (vendorSock.authState.creds.registered) {
-        pairingCode = "ALREADY_ACTIVE";
-    }
-
-    vendorSock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
-
-        if (connection === 'open') {
-            console.log(`🚀 Vendor Agent LIVE for ${storeName} (${cleanPhone})!`);
-            if (typeof notifyVendorClients === 'function') {
-                notifyVendorClients(cleanPhone, 'whatsapp_status', { connected: true });
-            }
-            try {
-                const vendorData = await Vendor.findOne({ phoneNumber: cleanPhone });
-                if (vendorData && !vendorData.docsSent) {
-                    const docsMessage = `🎉 *CONGRATULATIONS! YOUR NAXR AI AGENT IS NOW LIVE!* 🚀\n\n` +
-                        `Your 7-Day Free Trial has officially started! Naxr AI is managing sales for *${storeName}*.\n\n` +
-                        `🔒 *PRIVACY & SECURITY GUARANTEE*\n` +
-                        `Your WhatsApp is completely safe. Naxr AI operates under strict privacy rules. We do NOT read your personal chats. The AI ONLY wakes up when a customer explicitly uses "buying intent" words. Your privacy is 100% protected.\n\n` +
-                        `📖 *QUICK OPERATIONAL GUIDE*\n` +
-                        `────────────────────────────\n` +
-                        `1️⃣ *Automated Catalog:* Customers can ask for your catalog, and the AI will auto-send your product pictures and prices.\n` +
-                        `2️⃣ *Virtual Accounts (Anti-Fraud):* Instead of links, Naxr generates a direct **Virtual Bank Account** for every transaction. Fake screenshots won't work anymore—the AI verifies payments instantly via Flutterwave and wires the money to you!\n\n` +
-                        `🛍️ ️ *MANAGE YOUR STORE DIRECTLY HERE*\n` +
-                        `Message yourself (this chat) with these commands:\n` +
-                        `• *stats* - View your total sales.\n` +
-                        `• *analytics* - Detailed breakdown of orders & revenue.\n` +
-                        `• *products* - See your current list of items.\n` +
-                        `• *ai off* / *ai on* - Toggle the AI agent.\n` +
-                        `• *edit description [new text]* - Update your business info.\n` +
-                        `• *delete product [name]* - Remove an item.\n` +
-                        `• *confirm test* - Manually confirm a test payment (test mode only).\n` +
-                        `• *Add new item:* Simply send a picture of the product to this chat and write the price and name in the caption!\n\n` +
-                        `✨ *You are now ready to scale your business on autopilot!* 🥂`;
-
-                    await vendorSock.sendMessage(`${cleanPhone}@s.whatsapp.net`, { text: docsMessage });
-                    vendorData.docsSent = true;
-                    await vendorData.save();
-                }
-            } catch (e) { }
-
-            // ── Sender-key warmup ──────────────────────────────────────────
-            // When the AI bot (linked device) sends a message, WhatsApp also
-            // sends an encrypted sync copy to the vendor's primary phone.
-            // If the sender-key hasn't been distributed yet, the vendor sees
-            // "Waiting for this message." Subscribing to our own presence
-            // triggers WhatsApp to distribute the bot's sender-key to all of
-            // the vendor's registered devices, fixing this issue.
-            setTimeout(async () => {
-                try {
-                    const selfJid = `${cleanPhone}@s.whatsapp.net`;
-                    await vendorSock.subscribePresenceUpdates(selfJid);
-                    await vendorSock.sendPresenceUpdate('available', selfJid);
-                } catch (e) { }
-            }, 5000);
-        }
-
-        if (connection === 'close') {
-            if (typeof notifyVendorClients === 'function') {
-                notifyVendorClients(cleanPhone, 'whatsapp_status', { connected: false });
-            }
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            if (statusCode === 440 || statusCode === 401 || statusCode === 428 || statusCode === 409) {
-                if (vendorSockets[cleanPhone]) {
-                    vendorSockets[cleanPhone].ev.removeAllListeners('creds.update');
-                    vendorSockets[cleanPhone].ev.removeAllListeners('connection.update');
-                    delete vendorSockets[cleanPhone];
-                }
-                // Clear both DB and in-memory cache to force a clean re-auth
-                await clearAuthSession(`vendor_${cleanPhone}`);
-                return;
-            }
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            delete vendorSockets[cleanPhone];
-            if (shouldReconnect) setTimeout(() => spawnVendorAgent(cleanPhone, storeName, false), statusCode === 515 ? 1000 : 5000);
-        }
-    });
-
-
-    vendorSock.ev.on('messages.upsert', async (m) => {
-        if (m.type !== 'notify' && m.type !== 'append') return;
-        // Filter out encrypted noise from WhatsApp's internal @lid linked-device JIDs
-        m.messages = m.messages.filter(msg => !msg.key?.remoteJid?.endsWith('@lid') || msg.message);
-
-        for (const msg of m.messages) {
+    const messages = [msg];
+    for (const msg of messages) {
             try {
                 if (!msg.message) continue;
 
@@ -1290,84 +1136,27 @@ Rules:
             } catch (error) {
                 console.error(`❌ Message Processing Error for ${msg?.key?.remoteJid}:`, error);
             }
-        }
-    });
-
-    return pairingCode;
+    }
 }
+
 
 // ----------------------------------------------------
 // 5. MASTER ONBOARDING AGENT SOCKET
 // ----------------------------------------------------
+
 async function startNaxrMasterAgent(isReconnect = false) {
-    // Clean stale Signal sessions on every boot to prevent Bad MAC / MessageCounterError
-    await cleanStaleSessionKeys('master_agent_session');
-    const { state, saveCreds } = await useMongoDBAuthState('master_agent_session');
+    console.log("ℹ️ startNaxrMasterAgent called (No-op in WhatsApp Cloud API mode)");
+}
 
-    const sock = makeWASocket({
-        auth: state,
-        logger: pino({ level: 'error' }),
-        printQRInTerminal: false,
-        browser: ["Mac OS", "Safari", "17.0.0"],
-        syncFullHistory: false,
-        keepAliveIntervalMs: 30000,
-        // Provide getMessage so Baileys can retry-decrypt messages after reconnect
-        getMessage: async (key) => {
-            try {
-                let stored = await Message.findOne({
-                    vendorPhone: 'master_agent',
-                    messageId: key.id
-                }).lean();
-                if (!stored) {
-                    const jidNum = cleanPhoneNumber(key.remoteJid || '');
-                    stored = await Message.findOne({
-                        vendorPhone: 'master_agent',
-                        customerPhone: jidNum
-                    }).sort({ timestamp: -1 }).lean();
-                }
-                if (stored) return { conversation: stored.text };
-            } catch (e) { }
-            return { conversation: '' };
+async function handleMasterAgentMessage(msg) {
+    const sock = {
+        sendMessage: (jid, content, options = {}) => {
+            return safeSendMessage('master_agent', jid, content, options);
         }
-    });
-
-    globalSock = sock;
-    sock.ev.on('creds.update', saveCreds);
-
-    // Wrap sendMessage to route through typing indicator, queue, and DB logger
-    sock.originalSendMessage = sock.sendMessage;
-    sock.sendMessage = (jid, content, options = {}) => {
-        return safeSendMessage(sock, jid, content, options);
     };
 
-    if (!sock.authState.creds.registered && !isReconnect) {
-        await delay(4000);
-        const myNumber = cleanPhoneNumber(ADMIN_PHONE);
-        try {
-            const code = await sock.requestPairingCode(myNumber);
-            console.log(`\n======================================`);
-            console.log(`🔑 NAXR MASTER PAIRING CODE: ${code}`);
-            console.log(`======================================\n`);
-        } catch (err) { }
-    }
-
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
-        if (connection === 'open') console.log("🚀 NAXR MASTER ONBOARDING AGENT IS LIVE! 🇳🇬");
-        if (connection === 'close') {
-            const statusCode = lastDisconnect?.error?.output?.statusCode;
-            if (statusCode === 440 || statusCode === 409) return;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) setTimeout(() => startNaxrMasterAgent(true), statusCode === 515 ? 1000 : 5000);
-        }
-    });
-
-    sock.ev.on('messages.upsert', async (m) => {
-        if (m.type !== 'notify' && m.type !== 'append') return;
-        // Filter out @lid linked-device JID noise that triggers decrypt errors
-        m.messages = m.messages.filter(msg => !msg.key?.remoteJid?.endsWith('@lid') || msg.message);
-
-        for (const msg of m.messages) {
+    const messages = [msg];
+    for (const msg of messages) {
             try {
                 if (!msg.message) continue;
                 if (msg.key.id && botMessageIds.has(msg.key.id)) continue;
@@ -1736,11 +1525,133 @@ async function startNaxrMasterAgent(isReconnect = false) {
             } catch (error) {
                 console.error(`❌ Message Processing Error for ${msg?.key?.remoteJid}:`, error);
             }
-        }
-    });
+    }
 }
 
+
 // ----------------------------------------------------
+// WhatsApp Webhook (Meta Cloud API)
+// ----------------------------------------------------
+app.get('/webhook/whatsapp', (req, res) => {
+    const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN || 'naxr_verify_token';
+    const mode = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
+
+    if (mode && token) {
+        if (mode === 'subscribe' && token === verifyToken) {
+            console.log('✅ Webhook verified successfully!');
+            res.status(200).send(challenge);
+        } else {
+            console.log('❌ Webhook verification failed: Token mismatch.');
+            res.sendStatus(403);
+        }
+    } else {
+        res.sendStatus(400);
+    }
+});
+
+app.post('/webhook/whatsapp', async (req, res) => {
+    res.sendStatus(200);
+
+    const body = req.body;
+    if (body.object !== 'whatsapp_business_account') return;
+
+    try {
+        const entries = body.entry || [];
+        for (const entry of entries) {
+            const changes = entry.changes || [];
+            for (const change of changes) {
+                const value = change.value || {};
+                const messages = value.messages || [];
+                const metadata = value.metadata || {};
+                const recipientPhoneId = metadata.phone_number_id;
+
+                for (const msg of messages) {
+                    await handleIncomingMetaMessage(recipientPhoneId, msg, value.contacts?.[0]);
+                }
+            }
+        }
+    } catch (err) {
+        console.error('❌ Error processing WhatsApp Webhook:', err.message);
+    }
+});
+
+async function handleIncomingMetaMessage(recipientPhoneId, metaMsg, contact) {
+    const masterPhoneId = process.env.WHATSAPP_MASTER_PHONE_NUMBER_ID;
+    const isMaster = recipientPhoneId === masterPhoneId;
+
+    let vendorPhone = 'master_agent';
+    let accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+
+    if (!isMaster) {
+        const vendor = await Vendor.findOne({ whatsappPhoneNumberId: recipientPhoneId });
+        if (vendor) {
+            vendorPhone = vendor.phoneNumber;
+            if (vendor.whatsappAccessToken) accessToken = vendor.whatsappAccessToken;
+        } else {
+            const defaultVendor = await Vendor.findOne({});
+            if (defaultVendor) {
+                vendorPhone = defaultVendor.phoneNumber;
+                if (defaultVendor.whatsappAccessToken) accessToken = defaultVendor.whatsappAccessToken;
+            } else {
+                console.log(`⚠️ No registered vendor found for Phone ID ${recipientPhoneId}`);
+                return;
+            }
+        }
+    }
+
+    let text = '';
+    let isImage = false;
+    let mediaId = null;
+
+    if (metaMsg.type === 'text') {
+        text = metaMsg.text?.body || '';
+    } else if (metaMsg.type === 'interactive') {
+        const interactive = metaMsg.interactive || {};
+        if (interactive.type === 'button_reply') {
+            text = interactive.button_reply?.title || '';
+        } else if (interactive.type === 'list_reply') {
+            text = interactive.list_reply?.title || '';
+        }
+    } else if (metaMsg.type === 'image') {
+        isImage = true;
+        mediaId = metaMsg.image?.id;
+        text = metaMsg.image?.caption || '';
+    }
+
+    if (!text && !isImage) return;
+
+    const senderPhone = metaMsg.from;
+    const remoteJid = `${senderPhone}@s.whatsapp.net`;
+
+    const mockMsg = {
+        isMeta: true,
+        mediaId: mediaId,
+        phoneNumberId: recipientPhoneId,
+        accessToken: accessToken,
+        key: {
+            id: metaMsg.id,
+            remoteJid: remoteJid,
+            fromMe: false
+        },
+        messageTimestamp: parseInt(metaMsg.timestamp),
+        message: isImage ? {
+            imageMessage: {
+                caption: text
+            }
+        } : {
+            conversation: text
+        }
+    };
+
+    if (isMaster) {
+        await handleMasterAgentMessage(mockMsg);
+    } else {
+        await handleVendorAgentMessage(vendorPhone, mockMsg);
+    }
+}
+
 // 6. FLUTTERWAVE WEBHOOK (via Svix)
 // ----------------------------------------------------
 app.post('/webhook/flutterwave', express.raw({ type: 'application/json' }), async (req, res) => {
