@@ -144,37 +144,9 @@ async function clearAuthSession(sessionId) {
 // Credentials, pre-keys, and signed-pre-keys are intentionally preserved so
 // the device stays registered without re-pairing.
 async function cleanStaleSessionKeys(sessionId) {
-    // 1. Delete from MongoDB
-    try {
-        const result = await Auth.deleteMany({
-            _id: {
-                $regex: `^${sessionId}-(session-|sender-key-|sender-key-memory-)`
-            }
-        });
-        if (result.deletedCount > 0) {
-            console.log(`🧹 Wiped ${result.deletedCount} stale Signal session keys from DB for [${sessionId}]`);
-        }
-    } catch (err) {
-        console.error(`⚠️ cleanStaleSessionKeys DB error [${sessionId}]:`, err.message);
-    }
-    // 2. Delete from local filesystem
-    try {
-        const dir = path.join(process.cwd(), 'auth_states', sessionId);
-        if (fs.existsSync(dir)) {
-            const files = fs.readdirSync(dir);
-            for (const file of files) {
-                if (
-                    file.startsWith('session-') ||
-                    file.startsWith('sender-key-') ||
-                    file.startsWith('sender-key-memory-')
-                ) {
-                    fs.unlinkSync(path.join(dir, file));
-                }
-            }
-        }
-    } catch (err) {
-        console.error(`⚠️ cleanStaleSessionKeys file error [${sessionId}]:`, err.message);
-    }
+    // No-op to prevent wiping session/sender keys on restarts/reconnects.
+    // Wiping these keys causes decryption failures ("Waiting for this message") for customers.
+    console.log(`ℹ️ cleanStaleSessionKeys skipped for [${sessionId}] to preserve chat encryption state.`);
 }
 
 async function useMongoDBAuthState(sessionId = 'creds') {
