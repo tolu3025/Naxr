@@ -1578,7 +1578,7 @@ app.post('/webhook/whatsapp', express.json(), async (req, res) => {
 });
 
 async function handleIncomingMetaMessage(recipientPhoneId, metaMsg, contact) {
-    const masterPhoneId = process.env.WHATSAPP_MASTER_PHONE_NUMBER_ID;
+    const masterPhoneId = process.env.WHATSAPP_MASTER_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID;
     const isMaster = recipientPhoneId === masterPhoneId;
 
     let vendorPhone = 'master_agent';
