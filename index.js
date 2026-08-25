@@ -314,47 +314,117 @@ const botMessageIds = new Set();
 
 const sendQueue = {};
 
-async function safeSendMessage(sock, jid, content, options = {}) {
-    if (!sock) return null;
+async function safeSendMessage(agentContext, jid, content, options = {}) {
+    if (!agentContext) return null;
     
-    // Create a unique key for the queue based on socket configuration and receiver JID
-    const queueKey = `${sock.authState?.creds?.me?.id || 'default'}-${jid}`;
+    let vendorPhone = agentContext;
+    if (typeof agentContext === 'object') {
+        vendorPhone = Object.keys(vendorSockets).find(phone => vendorSockets[phone] === agentContext) || 'master_agent';
+    }
+    const isMaster = vendorPhone === 'master_agent';
+
+    let phoneNumberId = process.env.WHATSAPP_PHONE_NUMBER_ID;
+    let accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+
+    if (isMaster) {
+        phoneNumberId = process.env.WHATSAPP_MASTER_PHONE_NUMBER_ID || phoneNumberId;
+    } else {
+        try {
+            const vendor = await Vendor.findOne({ phoneNumber: vendorPhone }).lean();
+            if (vendor) {
+                if (vendor.whatsappPhoneNumberId) phoneNumberId = vendor.whatsappPhoneNumberId;
+                if (vendor.whatsappAccessToken) accessToken = vendor.whatsappAccessToken;
+            }
+        } catch (e) {
+            console.error("Error looking up vendor credentials in safeSendMessage:", e.message);
+        }
+    }
+
+    if (!phoneNumberId || !accessToken) {
+        console.error(`⚠️ Cannot send WhatsApp message: Missing credentials for [${vendorPhone}]`);
+        return null;
+    }
+
+    console.log(`📤 safeSendMessage: Queueing message to ${jid} (vendor: ${vendorPhone}) via Phone ID: ${phoneNumberId}`);
+
+    const queueKey = `${vendorPhone}-${jid}`;
     if (!sendQueue[queueKey]) {
         sendQueue[queueKey] = Promise.resolve();
     }
 
     const sendPromise = sendQueue[queueKey].then(async () => {
         try {
-            // Trigger "composing" presence status to mimic human typing
+            const toPhone = cleanPhoneNumber(jid);
+            
             try {
-                await sock.sendPresenceUpdate('composing', jid);
+                await axios.post(
+                    `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`,
+                    {
+                        messaging_product: 'whatsapp',
+                        recipient_type: 'individual',
+                        to: toPhone,
+                        sender_action: 'typing_on'
+                    },
+                    { headers: { Authorization: `Bearer ${accessToken}` } }
+                ).catch(() => {});
             } catch (e) {}
 
-            // Random delay between 1.5 to 3.5 seconds to feel organic
-            const typingTime = 1500 + Math.random() * 2000;
+            const typingTime = 1000 + Math.random() * 1500;
             await delay(typingTime);
 
-            try {
-                await sock.sendPresenceUpdate('paused', jid);
-            } catch (e) {}
+            let payload = {
+                messaging_product: 'whatsapp',
+                recipient_type: 'individual',
+                to: toPhone
+            };
 
-            const sendFunc = sock.originalSendMessage || sock.sendMessage;
-            const sent = await sendFunc.bind(sock)(jid, content, options);
-            if (sent?.key?.id) {
-                botMessageIds.add(sent.key.id);
+            if (content.react) {
+                payload.type = 'reaction';
+                payload.reaction = {
+                    message_id: content.react.key?.id || '',
+                    emoji: content.react.text
+                };
+            } else if (content.image) {
+                payload.type = 'image';
+                payload.image = {
+                    link: content.image.url || content.image,
+                    caption: content.caption || ''
+                };
+            } else if (content.text) {
+                payload.type = 'text';
+                payload.text = {
+                    body: content.text
+                };
+            } else if (content.template) {
+                payload.type = 'template';
+                payload.template = content.template;
+            } else {
+                console.log(`⚠️ safeSendMessage: Unknown content format for ${jid}`);
+                return null;
+            }
+
+            console.log(`📤 safeSendMessage: Posting message payload to Meta:`, JSON.stringify(payload));
+            const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`;
+            const res = await axios.post(url, payload, {
+                headers: {
+                    Authorization: `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            const sentMessageId = res.data?.messages?.[0]?.id;
+            if (sentMessageId) {
+                console.log(`✅ safeSendMessage: Message successfully sent. ID: ${sentMessageId}`);
+                botMessageIds.add(sentMessageId);
                 if (botMessageIds.size > 3000) {
                     const firstKey = botMessageIds.values().next().value;
                     botMessageIds.delete(firstKey);
                 }
                 
                 try {
-                    let vendorPhone = Object.keys(vendorSockets).find(phone => vendorSockets[phone] === sock);
-                    if (!vendorPhone && sock === globalSock) {
-                        vendorPhone = 'master_agent';
-                    }
-                    if (vendorPhone && jid && jid.endsWith('@s.whatsapp.net')) {
+                    if (jid && !jid.endsWith('@g.us')) {
                         const customerPhone = cleanPhoneNumber(jid);
-                        const text = content.text || content.caption || "";
+                        const text = content.text || content.caption || (content.react ? `Reacted ${content.react.text}` : "");
                         if (text && customerPhone !== vendorPhone) {
                             await Message.create({
                                 vendorPhone,
@@ -362,7 +432,7 @@ async function safeSendMessage(sock, jid, content, options = {}) {
                                 text,
                                 fromMe: true,
                                 isAi: !options.manual,
-                                messageId: sent.key.id
+                                messageId: sentMessageId
                             });
                             if (typeof notifyVendorClients === 'function') {
                                 notifyVendorClients(vendorPhone, 'ai_replied', {
@@ -380,11 +450,10 @@ async function safeSendMessage(sock, jid, content, options = {}) {
                 }
             }
             
-            // Post-send cool-off spacing of 500ms before sending the next one
             await delay(500);
-            return sent;
+            return { key: { id: sentMessageId } };
         } catch (err) {
-            console.error("❌ safeSendMessage Error:", err.message);
+            console.error("❌ safeSendMessage Meta API Error:", err.response ? err.response.data : err.message);
             return null;
         }
     });
@@ -1555,6 +1624,8 @@ app.post('/webhook/whatsapp', express.json(), async (req, res) => {
     res.sendStatus(200);
 
     const body = req.body || {};
+    console.log("📥 Received WhatsApp Webhook:", JSON.stringify(body, null, 2));
+
     if (body.object !== 'whatsapp_business_account') return;
 
     try {
@@ -1580,6 +1651,8 @@ app.post('/webhook/whatsapp', express.json(), async (req, res) => {
 async function handleIncomingMetaMessage(recipientPhoneId, metaMsg, contact) {
     const masterPhoneId = process.env.WHATSAPP_MASTER_PHONE_NUMBER_ID || process.env.WHATSAPP_PHONE_NUMBER_ID;
     const isMaster = recipientPhoneId === masterPhoneId;
+
+    console.log(`🔍 Routing message from ${metaMsg.from} to recipient Phone ID ${recipientPhoneId} (isMaster: ${isMaster}, configured master ID: ${masterPhoneId})`);
 
     let vendorPhone = 'master_agent';
     let accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
