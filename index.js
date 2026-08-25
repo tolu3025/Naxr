@@ -1274,17 +1274,13 @@ async function handleMasterAgentMessage(msg) {
                         await Vendor.deleteOne({ phoneNumber: targetPhone });
                         await Product.deleteMany({ vendorPhone: targetPhone });
 
-                        await RegSession.deleteOne({ phoneNumber: remoteJid });
-
-                        await sock.sendMessage(remoteJid, { 
-                            text: `🎉 *SETUP COMPLETED SUCCESSFULLY!* 🚀\n\n` +
-                                  `Your store *${session.storeName}* is fully saved!\n\n` +
-                                  `📱 *How to activate your AI agent on your phone:* \n` +
-                                  `1. Download the *Naxr Merchant App*.\n` +
-                                  `2. Sign in, go to the dashboard and tap *Link Device*.\n` +
-                                  `3. Enter your phone number (*+${targetPhone}*) to receive an SMS verification code.\n` +
-                                  `4. Enter the code in the app to connect your WhatsApp AI agent! ✨` 
-                        });
+                        if (vendorSockets[targetPhone]) {
+                            vendorSockets[targetPhone].ev.removeAllListeners('connection.update');
+                            try { vendorSockets[targetPhone].ws.close(); } catch (e) { }
+                            delete vendorSockets[targetPhone];
+                        }
+                        await Auth.deleteMany({ _id: { $regex: `^vendor_${targetPhone}` } });
+                        await safeSendMessage(sock, remoteJid, { text: `✅ Vendor ${targetPhone} completely purged from system.` });
                         continue;
                     }
                     if (lowerText.startsWith('activate vendor ')) {
@@ -1529,26 +1525,18 @@ async function handleMasterAgentMessage(msg) {
                             }
                         }
 
-                        if (vendorSockets[targetPhone]) {
-                            vendorSockets[targetPhone].ev.removeAllListeners('connection.update');
-                            vendorSockets[targetPhone].ev.removeAllListeners('creds.update');
-                            vendorSockets[targetPhone].ev.removeAllListeners('messages.upsert');
-                            try { vendorSockets[targetPhone].ws.close(); } catch (e) { }
-                            delete vendorSockets[targetPhone];
-                            await delay(1500);
-                        }
-                        await Auth.deleteMany({ _id: { $regex: `^vendor_${targetPhone}` } });
-
-                        const pairingCode = await spawnVendorAgent(targetPhone, session.storeName, true);
                         await RegSession.deleteOne({ phoneNumber: remoteJid });
 
-                        if (pairingCode && pairingCode !== "ALREADY_ACTIVE" && pairingCode !== "ERROR") {
-                            await sock.sendMessage(remoteJid, { text: `🎉 *SETUP COMPLETED SUCCESSFULLY!* 🚀\n\nYour store *${session.storeName}* is active!\n\n🔑 *YOUR VENDOR AI PAIRING CODE:* \`${pairingCode}\`\n\n🛍️¡️ *Note:* Because Naxr is an automated AI, WhatsApp may show a security warning asking if you know who is linking the device. Tap *"Continue"* to authorize your bot.\n\n*How to link your AI:*\n1. Open WhatsApp Settings > Linked Devices > Link a Device > Link with phone number instead.\n2. Enter code on phone number *+${targetPhone}*! ✨` });
-                        } else if (pairingCode === "ALREADY_ACTIVE") {
-                            await sock.sendMessage(remoteJid, { text: `🎉 *SETUP COMPLETED!* Your AI is already connected and active! ✨` });
-                        } else {
-                            await sock.sendMessage(remoteJid, { text: `🎉 *SETUP COMPLETED!* 🚀\n\nYour store is fully saved!\n\n⚠️ *Meta's network experienced a slight delay so your pairing code couldn't be instantly generated.*\n\n👉 *Please reply with LINK right now to generate your code!*` });
-                        }
+                        await sock.sendMessage(remoteJid, { 
+                            text: `🎉 *SETUP COMPLETED SUCCESSFULLY!* 🚀\n\n` +
+                                  `Your store *${session.storeName}* is fully saved!\n\n` +
+                                  `📱 *How to activate your AI agent on your phone:* \n` +
+                                  `1. Download the *Naxr Merchant App* APK:\n` +
+                                  `   👉 https://naxr.onrender.com/download/naxr-merchant-app.apk\n\n` +
+                                  `2. Sign in, go to the dashboard and tap *Link Device*.\n` +
+                                  `3. Enter your phone number (*+${targetPhone}*) to receive an SMS verification code.\n` +
+                                  `4. Enter the code in the app to connect your WhatsApp AI agent! ✨` 
+                        });
                         continue;
                     }
 
@@ -1601,6 +1589,11 @@ async function handleMasterAgentMessage(msg) {
     }
 }
 
+
+app.get('/download/naxr-merchant-app.apk', (req, res) => {
+    const downloadUrl = process.env.APK_DOWNLOAD_URL || 'https://github.com/tolu3025/Naxr/releases';
+    res.redirect(downloadUrl);
+});
 
 // ----------------------------------------------------
 // WhatsApp Webhook (Meta Cloud API)
