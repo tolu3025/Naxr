@@ -2070,6 +2070,126 @@ app.post('/api/vendor/:phone/settings', checkAuth, async (req, res) => {
     }
 });
 
+// Add vendor's phone number to platform WABA
+app.post('/api/vendor/:phone/whatsapp/add-number', checkAuth, express.json(), async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized access" });
+
+        const { targetPhoneNumber } = req.body;
+        if (!targetPhoneNumber) return res.status(400).json({ error: "Target phone number is required" });
+
+        const vendor = await Vendor.findOne({ phoneNumber: phone });
+        if (!vendor) return res.status(404).json({ error: "Vendor not found" });
+
+        const cleanTarget = cleanPhoneNumber(targetPhoneNumber);
+        let cc = "234";
+        let localNum = cleanTarget;
+        if (cleanTarget.startsWith("234")) {
+            cc = "234";
+            localNum = cleanTarget.substring(3);
+        } else if (cleanTarget.startsWith("1")) {
+            cc = "1";
+            localNum = cleanTarget.substring(1);
+        } else {
+            if (cleanTarget.length > 10) {
+                cc = cleanTarget.substring(0, cleanTarget.length - 10);
+                localNum = cleanTarget.substring(cleanTarget.length - 10);
+            }
+        }
+
+        const wabaId = process.env.WHATSAPP_BUSINESS_ACCOUNT_ID;
+        const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+
+        if (!wabaId || !accessToken) {
+            return res.status(500).json({ error: "Platform WABA ID or Access Token is not configured on server." });
+        }
+
+        const url = `https://graph.facebook.com/v20.0/${wabaId}/phone_numbers`;
+        const response = await axios.post(url, {
+            cc: cc,
+            phone_number: localNum,
+            verified_name: vendor.storeName
+        }, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+
+        const newPhoneId = response.data?.id;
+        if (!newPhoneId) {
+            return res.status(500).json({ error: "Failed to obtain Phone ID from Meta." });
+        }
+
+        vendor.whatsappPhoneNumberId = newPhoneId;
+        await vendor.save();
+
+        return res.json({ success: true, whatsappPhoneNumberId: newPhoneId });
+    } catch (e) {
+        console.error("❌ Add number error:", e.response ? e.response.data : e.message);
+        return res.status(500).json({ error: e.response?.data?.error?.message || e.message });
+    }
+});
+
+// Request SMS OTP for registered Phone ID
+app.post('/api/vendor/:phone/whatsapp/request-code', checkAuth, express.json(), async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized access" });
+
+        const vendor = await Vendor.findOne({ phoneNumber: phone });
+        if (!vendor || !vendor.whatsappPhoneNumberId) {
+            return res.status(400).json({ error: "Please register your phone number first." });
+        }
+
+        const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+        const url = `https://graph.facebook.com/v20.0/${vendor.whatsappPhoneNumberId}/request_code`;
+        
+        await axios.post(url, {
+            code_method: 'SMS',
+            language: 'en_US'
+        }, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+
+        return res.json({ success: true });
+    } catch (e) {
+        console.error("❌ Request code error:", e.response ? e.response.data : e.message);
+        return res.status(500).json({ error: e.response?.data?.error?.message || e.message });
+    }
+});
+
+// Verify SMS OTP and complete registration
+app.post('/api/vendor/:phone/whatsapp/verify-code', checkAuth, express.json(), async (req, res) => {
+    try {
+        const phone = req.params.phone;
+        if (req.vendorPhone !== phone) return res.status(403).json({ error: "Unauthorized access" });
+
+        const { code } = req.body;
+        if (!code) return res.status(400).json({ error: "Verification code is required" });
+
+        const vendor = await Vendor.findOne({ phoneNumber: phone });
+        if (!vendor || !vendor.whatsappPhoneNumberId) {
+            return res.status(400).json({ error: "Please register your phone number first." });
+        }
+
+        const accessToken = process.env.WHATSAPP_ACCESS_TOKEN;
+        const url = `https://graph.facebook.com/v20.0/${vendor.whatsappPhoneNumberId}/register`;
+
+        await axios.post(url, {
+            pin: code
+        }, {
+            headers: { Authorization: `Bearer ${accessToken}` }
+        });
+
+        vendor.whatsappAccessToken = ""; 
+        await vendor.save();
+
+        return res.json({ success: true });
+    } catch (e) {
+        console.error("❌ Verify code error:", e.response ? e.response.data : e.message);
+        return res.status(500).json({ error: e.response?.data?.error?.message || e.message });
+    }
+});
+
 // Products Routes
 app.get('/api/vendor/:phone/products', checkAuth, async (req, res) => {
     try {

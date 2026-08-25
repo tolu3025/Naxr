@@ -194,41 +194,53 @@ class VendorStore extends ChangeNotifier {
     }
   }
 
-  Future<void> saveWhatsAppCredentials(String phoneId, String token) async {
-    if (_phone == null) return;
+  Future<String> addWhatsAppNumber(String targetPhone) async {
+    if (_phone == null) throw Exception('No phone number logged in');
     final response = await http.post(
-      Uri.parse('$baseUrl/api/vendor/$_phone/settings'),
+      Uri.parse('$baseUrl/api/vendor/$_phone/whatsapp/add-number'),
       headers: _headers,
       body: jsonEncode({
-        'whatsappPhoneNumberId': phoneId,
-        'whatsappAccessToken': token,
+        'targetPhoneNumber': targetPhone,
       }),
     );
+    final data = jsonDecode(response.body);
     if (response.statusCode == 200) {
-      _whatsappPhoneNumberId = phoneId;
-      _whatsappAccessToken = token;
+      _whatsappPhoneNumberId = data['whatsappPhoneNumberId'] ?? '';
       notifyListeners();
+      return _whatsappPhoneNumberId;
     } else {
-      final data = jsonDecode(response.body);
-      throw Exception(data['error'] ?? 'Failed to save WhatsApp settings');
+      throw Exception(data['error'] ?? 'Failed to add phone number');
     }
   }
 
-  Future<String> fetchPairingCode() async {
+  Future<void> requestWhatsAppOTP() async {
     if (_phone == null) throw Exception('No phone number logged in');
-    final response = await http
-        .get(
-          Uri.parse('$baseUrl/api/vendor/$_phone/pair-code'),
-          headers: _headers,
-        )
-        .timeout(const Duration(seconds: 45));
-
-    if (response.statusCode == 200) {
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/vendor/$_phone/whatsapp/request-code'),
+      headers: _headers,
+      body: jsonEncode({}),
+    );
+    if (response.statusCode != 200) {
       final data = jsonDecode(response.body);
-      return data['pairingCode'] ?? '';
+      throw Exception(data['error'] ?? 'Failed to request SMS code');
+    }
+  }
+
+  Future<void> verifyWhatsAppOTP(String code) async {
+    if (_phone == null) throw Exception('No phone number logged in');
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/vendor/$_phone/whatsapp/verify-code'),
+      headers: _headers,
+      body: jsonEncode({
+        'code': code,
+      }),
+    );
+    if (response.statusCode == 200) {
+      _whatsappAccessToken = ''; // defaults to central platform token
+      notifyListeners();
     } else {
       final data = jsonDecode(response.body);
-      throw Exception(data['error'] ?? 'Failed to generate pairing code');
+      throw Exception(data['error'] ?? 'SMS Verification failed');
     }
   }
 }

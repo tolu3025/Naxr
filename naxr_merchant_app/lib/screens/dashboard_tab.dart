@@ -433,168 +433,185 @@ class _DashboardTabState extends State<DashboardTab> {
   }
 
   void _handleShowPairingCodeDialog(BuildContext context, VendorStore store) {
-    final phoneIdController = TextEditingController();
-    final tokenController = TextEditingController();
+    final phoneController = TextEditingController();
+    final otpController = TextEditingController();
+
+    phoneController.text = store.phone ?? '';
 
     showDialog(
       context: context,
       barrierDismissible: true,
       builder: (context) {
-        return FutureBuilder<Map<String, dynamic>>(
-          future: store.fetchSettings(),
-          builder: (context, snapshot) {
-            final isLoading = snapshot.connectionState == ConnectionState.waiting;
-            if (!isLoading && snapshot.hasData) {
-              phoneIdController.text = snapshot.data?['whatsappPhoneNumberId'] ?? '';
-              tokenController.text = snapshot.data?['whatsappAccessToken'] ?? '';
+        int currentStep = 1;
+        bool isRequesting = false;
+        bool isVerifying = false;
+
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            void handleSendOTP() async {
+              final targetPhone = phoneController.text.trim();
+              if (targetPhone.isEmpty) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter your WhatsApp phone number.')),
+                );
+                return;
+              }
+
+              setDialogState(() {
+                isRequesting = true;
+              });
+
+              try {
+                await store.addWhatsAppNumber(targetPhone);
+                await store.requestWhatsAppOTP();
+                
+                setDialogState(() {
+                  currentStep = 2;
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Verification SMS sent successfully!')),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Failed to request SMS: $e')),
+                );
+              } finally {
+                setDialogState(() {
+                  isRequesting = false;
+                });
+              }
             }
 
-            return StatefulBuilder(
-              builder: (context, setDialogState) {
-                bool isSaving = false;
-                
-                void handleSave() async {
-                  if (phoneIdController.text.trim().isEmpty || tokenController.text.trim().isEmpty) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Please fill in both Phone ID and Token.')),
-                    );
-                    return;
-                  }
-
-                  setDialogState(() {
-                    isSaving = true;
-                  });
-                  try {
-                    await store.saveWhatsAppCredentials(
-                      phoneIdController.text.trim(),
-                      tokenController.text.trim(),
-                    );
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('WhatsApp credentials updated successfully!')),
-                    );
-                  } catch (e) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Failed to save: $e')),
-                    );
-                  } finally {
-                    setDialogState(() {
-                      isSaving = false;
-                    });
-                  }
-                }
-
-                return AlertDialog(
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  title: const Row(
-                    children: [
-                      Icon(Icons.settings_input_component, color: AppTheme.primaryGreen),
-                      SizedBox(width: 8),
-                      Text('Link WhatsApp API', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-                    ],
-                  ),
-                  content: isLoading
-                      ? const SizedBox(
-                          height: 100,
-                          child: Center(child: CircularProgressIndicator(color: AppTheme.primaryGreen)),
-                        )
-                      : SingleChildScrollView(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            crossAxisAlignment: CrossAxisAlignment.stretch,
-                            children: [
-                              const Text(
-                                'Provide your WhatsApp Business Cloud API details below to connect your AI agent.',
-                                style: TextStyle(fontSize: 12, color: AppTheme.textMuted),
-                              ),
-                              const SizedBox(height: 16),
-                              const Text(
-                                'Phone Number ID',
-                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.secondaryDark),
-                              ),
-                              const SizedBox(height: 6),
-                              TextField(
-                                controller: phoneIdController,
-                                decoration: const InputDecoration(
-                                  hintText: 'e.g. 1208644078993009',
-                                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                              const Text(
-                                'Permanent Access Token',
-                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.secondaryDark),
-                              ),
-                              const SizedBox(height: 6),
-                              TextField(
-                                controller: tokenController,
-                                maxLines: 3,
-                                decoration: const InputDecoration(
-                                  hintText: 'Paste access token here...',
-                                  contentPadding: EdgeInsets.all(12),
-                                ),
-                              ),
-                              const SizedBox(height: 20),
-                              const Text(
-                                'Configuration Details:',
-                                style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.secondaryDark),
-                              ),
-                              const SizedBox(height: 8),
-                              Container(
-                                padding: const EdgeInsets.all(10),
-                                decoration: BoxDecoration(
-                                  color: Colors.grey.shade50,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(color: Colors.grey.shade100),
-                                ),
-                                child: const Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      'Callback URL:',
-                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                                    ),
-                                    SelectableText(
-                                      'https://naxr.onrender.com/webhook/whatsapp',
-                                      style: TextStyle(fontSize: 10, color: Colors.blue),
-                                    ),
-                                    SizedBox(height: 6),
-                                    Text(
-                                      'Verify Token:',
-                                      style: TextStyle(fontSize: 10, fontWeight: FontWeight.bold),
-                                    ),
-                                    SelectableText(
-                                      'naxr_verify_token',
-                                      style: TextStyle(fontSize: 10, color: Colors.blue),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                  actions: [
-                    TextButton(
-                      onPressed: isSaving ? null : () => Navigator.pop(context),
-                      child: const Text('Cancel'),
-                    ),
-                    if (!isLoading)
-                      ElevatedButton(
-                        onPressed: isSaving ? null : handleSave,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppTheme.primaryGreen,
-                        ),
-                        child: isSaving
-                            ? const SizedBox(
-                                width: 20,
-                                height: 20,
-                                child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
-                              )
-                            : const Text('Save Credentials'),
-                      ),
-                  ],
+            void handleVerifyOTP() async {
+              final otpCode = otpController.text.trim();
+              if (otpCode.isEmpty || otpCode.length < 6) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Please enter the 6-digit verification code.')),
                 );
-              },
+                return;
+              }
+
+              setDialogState(() {
+                isVerifying = true;
+              });
+
+              try {
+                await store.verifyWhatsAppOTP(otpCode);
+                Navigator.pop(context);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('WhatsApp linked successfully! Your AI is now online! 🎉')),
+                );
+              } catch (e) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('Verification failed: $e')),
+                );
+              } finally {
+                setDialogState(() {
+                  isVerifying = false;
+                });
+              }
+            }
+
+            return AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              title: Row(
+                children: [
+                  const Icon(Icons.whatsapp, color: AppTheme.whatsappGreen),
+                  const SizedBox(width: 8),
+                  Text(
+                    currentStep == 1 ? 'Link WhatsApp AI' : 'Enter Verification Code',
+                    style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    if (currentStep == 1) ...[
+                      const Text(
+                        'To link your store AI, enter your WhatsApp phone number. We will send you an SMS with a verification code.',
+                        style: TextStyle(fontSize: 13, color: AppTheme.textMuted, height: 1.4),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'WhatsApp Phone Number',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.secondaryDark),
+                      ),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: phoneController,
+                        keyboardType: TextInputType.phone,
+                        decoration: const InputDecoration(
+                          hintText: 'e.g. 2348148698365',
+                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      const Text(
+                        '⚠️ Note: Before linking, ensure this number is NOT currently registered on a physical phone WhatsApp/Business app (you must delete the account from your phone\'s WhatsApp app first).',
+                        style: TextStyle(fontSize: 11, color: AppTheme.dangerRed, height: 1.4),
+                      ),
+                    ] else ...[
+                      Text(
+                        'Enter the 6-digit verification code sent to +${phoneController.text.trim()}:',
+                        style: const TextStyle(fontSize: 13, color: AppTheme.textMuted, height: 1.4),
+                      ),
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Verification Code',
+                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: AppTheme.secondaryDark),
+                      ),
+                      const SizedBox(height: 6),
+                      TextField(
+                        controller: otpController,
+                        keyboardType: TextInputType.number,
+                        maxLength: 6,
+                        decoration: const InputDecoration(
+                          hintText: 'Enter 6-digit code',
+                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          counterText: '',
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: (isRequesting || isVerifying) ? null : () => Navigator.pop(context),
+                  child: const Text('Cancel'),
+                ),
+                if (currentStep == 1)
+                  ElevatedButton(
+                    onPressed: isRequesting ? null : handleSendOTP,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.primaryGreen,
+                    ),
+                    child: isRequesting
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                          )
+                        : const Text('Send Verification SMS'),
+                  )
+                else
+                  ElevatedButton(
+                    onPressed: isVerifying ? null : handleVerifyOTP,
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: AppTheme.whatsappGreen,
+                    ),
+                    child: isVerifying
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                          )
+                        : const Text('Verify & Link'),
+                  ),
+              ],
             );
           },
         );
