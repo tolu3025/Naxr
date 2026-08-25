@@ -484,9 +484,9 @@ class _DashboardTabState extends State<DashboardTab> {
 
             void handleVerifyOTP() async {
               final otpCode = otpController.text.trim();
-              if (otpCode.isEmpty || otpCode.length < 6) {
+              if (otpCode.isEmpty || otpCode.length < 5) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('Please enter the 6-digit verification code.')),
+                  const SnackBar(content: Text('Please enter the verification code.')),
                 );
                 return;
               }
@@ -555,7 +555,7 @@ class _DashboardTabState extends State<DashboardTab> {
                       ),
                     ] else ...[
                       Text(
-                        'Enter the 6-digit verification code sent to +${phoneController.text.trim()}:',
+                        'Enter the verification code sent to +${phoneController.text.trim()}:',
                         style: const TextStyle(fontSize: 13, color: AppTheme.textMuted, height: 1.4),
                       ),
                       const SizedBox(height: 16),

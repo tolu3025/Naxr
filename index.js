@@ -1274,13 +1274,17 @@ async function handleMasterAgentMessage(msg) {
                         await Vendor.deleteOne({ phoneNumber: targetPhone });
                         await Product.deleteMany({ vendorPhone: targetPhone });
 
-                        if (vendorSockets[targetPhone]) {
-                            vendorSockets[targetPhone].ev.removeAllListeners('connection.update');
-                            try { vendorSockets[targetPhone].ws.close(); } catch (e) { }
-                            delete vendorSockets[targetPhone];
-                        }
-                        await Auth.deleteMany({ _id: { $regex: `^vendor_${targetPhone}` } });
-                        await safeSendMessage(sock, remoteJid, { text: `✅ Vendor ${targetPhone} completely purged from system.` });
+                        await RegSession.deleteOne({ phoneNumber: remoteJid });
+
+                        await sock.sendMessage(remoteJid, { 
+                            text: `🎉 *SETUP COMPLETED SUCCESSFULLY!* 🚀\n\n` +
+                                  `Your store *${session.storeName}* is fully saved!\n\n` +
+                                  `📱 *How to activate your AI agent on your phone:* \n` +
+                                  `1. Download the *Naxr Merchant App*.\n` +
+                                  `2. Sign in, go to the dashboard and tap *Link Device*.\n` +
+                                  `3. Enter your phone number (*+${targetPhone}*) to receive an SMS verification code.\n` +
+                                  `4. Enter the code in the app to connect your WhatsApp AI agent! ✨` 
+                        });
                         continue;
                     }
                     if (lowerText.startsWith('activate vendor ')) {
@@ -1503,7 +1507,7 @@ async function handleMasterAgentMessage(msg) {
                                 subaccountCode: session.subaccountCode, 
                                 deliveryInfo: session.deliveryInfo, 
                                 faqs: session.faqs, 
-                                aiActive: true 
+                                aiActive: false 
                             },
                             { upsert: true, returnDocument: 'after' }
                         );
