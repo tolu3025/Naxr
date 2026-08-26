@@ -1934,6 +1934,12 @@ app.post('/api/auth/vendor/login', async (req, res) => {
         } else if (globalSock) {
             await safeSendMessage(globalSock, targetJid, { text });
             sent = true;
+        } else {
+            // Fallback for WhatsApp Cloud API mode: send via the master agent channel
+            const result = await safeSendMessage('master_agent', targetJid, { text });
+            if (result !== null) {
+                sent = true;
+            }
         }
 
         return res.json({ success: sent, message: sent ? "OTP sent successfully to your WhatsApp!" : "Failed to send OTP via WhatsApp. Please try again." });
