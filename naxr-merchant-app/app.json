@@ -4,6 +4,7 @@
     "slug": "naxr-merchant",
     "version": "1.0.0",
     "orientation": "portrait",
+    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "assetBundlePatterns": [
       "**/*"
@@ -12,7 +13,11 @@
       "supportsTablet": true
     },
     "android": {
-      "package": "com.softdev21.naxrmerchant"
+      "package": "com.softdev21.naxrmerchant",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      }
     },
     "plugins": [
       "expo-router"
@@ -23,9 +28,9 @@
         "origin": false
       },
       "eas": {
-        "projectId": "5e12f264-1a0e-4cca-82a3-007fd230b6eb"
+        "projectId": "d3c480c3-9026-4fe2-8ac6-a638def28e16"
       }
     },
-    "owner": "softdev21"
+    "owner": "softdev21s-team"
   }
 }
